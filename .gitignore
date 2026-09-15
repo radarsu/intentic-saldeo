@@ -1,0 +1,5 @@
+node_modules/
+
+# This repo is pnpm. An accidental `npm install` leaves one of these behind; committing it
+# gives the next person two lockfiles disagreeing about the same tree.
+package-lock.json

@@ -1,0 +1,31 @@
+{
+    "name": "intentic-saldeo",
+    "version": "1.0.0",
+    "description": "SaldeoSMART for the agent and the owner — match bank payments to open invoices, confirm, and have the agent mark them paid",
+    "license": "MIT",
+    "private": true,
+    "type": "module",
+    "packageManager": "pnpm@12.4.1",
+    "scripts": {
+        "build": "vite build && vite build --config vite.server.config.ts && vite build --config vite.cli.config.ts && vite build --config vite.mcp.config.ts && chmod +x dist/bin/saldeo dist/bin/saldeo-mcp",
+        "typecheck": "vue-tsc --noEmit -p tsconfig.json",
+        "test": "node --test test/*.test.ts test/*.test.mjs",
+        "verify": "pnpm run build && pnpm run typecheck && pnpm run test"
+    },
+    "dependencies": {
+        "@intentic/extension-api": "^1.270.0",
+        "@intentic/extension-ui": "^1.270.0"
+    },
+    "devDependencies": {
+        "@intentic/extension-manifest": "^1.270.0",
+        "@modelcontextprotocol/sdk": "^1.30.0",
+        "@tanstack/vue-query": "^5.90.2",
+        "@types/node": "^24.0.0",
+        "@vitejs/plugin-vue": "^6.0.1",
+        "typescript": "^5.9.3",
+        "vite": "^7.1.7",
+        "vue": "^3.5.22",
+        "vue-tsc": "^3.1.1",
+        "zod": "^4.1.0"
+    }
+}

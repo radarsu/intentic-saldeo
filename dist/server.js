@@ -1,0 +1,2066 @@
+import { randomUUID, createHash, randomBytes } from "node:crypto";
+import { gzipSync } from "node:zlib";
+import { rm, readdir, readFile, mkdir, writeFile, rename } from "node:fs/promises";
+import { join, dirname } from "node:path";
+const DEFAULT_BASE_URL = "https://saldeo.brainshare.pl";
+const parseAmount = (raw) => {
+  if (raw === void 0) {
+    return void 0;
+  }
+  let value = raw.replace(/[\s  ]/g, "").replace(/(PLN|EUR|USD|GBP|CHF|zł)$/i, "");
+  if (value === "" || value === "-") {
+    return void 0;
+  }
+  const negative = value.startsWith("-") || value.startsWith("(") && value.endsWith(")");
+  value = value.replace(/^[-+(]|\)$/g, "");
+  const lastComma = value.lastIndexOf(",");
+  const lastDot = value.lastIndexOf(".");
+  const decimalAt = Math.max(lastComma, lastDot);
+  let whole = value;
+  let fraction = "";
+  if (decimalAt >= 0 && /^\d{1,2}$/.test(value.slice(decimalAt + 1))) {
+    whole = value.slice(0, decimalAt);
+    fraction = value.slice(decimalAt + 1).padEnd(2, "0");
+  }
+  whole = whole.replace(/[.,]/g, "");
+  if (!/^\d*$/.test(whole) || !/^\d{0,2}$/.test(fraction) || whole === "" && fraction === "") {
+    return void 0;
+  }
+  const grosze = Number.parseInt(`${whole === "" ? "0" : whole}${fraction === "" ? "00" : fraction}`, 10);
+  return negative ? -grosze : grosze;
+};
+const formatAmount = (grosze, currency) => {
+  const sign = grosze < 0 ? "-" : "";
+  const abs = Math.abs(grosze);
+  const whole = Math.floor(abs / 100).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  const text2 = `${sign}${whole},${(abs % 100).toString().padStart(2, "0")}`;
+  return currency === void 0 ? text2 : `${text2} ${currency}`;
+};
+const saldeoAmount = (raw) => {
+  const value = parseAmount(raw);
+  return value ?? 0;
+};
+const ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+const decodeEntities = (value) => value.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z]+);/g, (whole, body) => {
+  if (body.startsWith("#x")) {
+    return String.fromCodePoint(Number.parseInt(body.slice(2), 16));
+  }
+  if (body.startsWith("#")) {
+    return String.fromCodePoint(Number.parseInt(body.slice(1), 10));
+  }
+  return ENTITIES[body] ?? whole;
+});
+const encodeXml = (value) => value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[char] ?? char);
+const ATTR = /([^\s=\/]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+const parseAttrs = (source) => {
+  const attrs = {};
+  for (const match of source.matchAll(ATTR)) {
+    attrs[match[1] ?? ""] = decodeEntities(match[2] ?? match[3] ?? "");
+  }
+  return attrs;
+};
+const parseXml = (source) => {
+  const stack = [{ name: "", attrs: {}, children: [], text: "" }];
+  let at2 = 0;
+  const top = () => stack[stack.length - 1];
+  while (at2 < source.length) {
+    const lt = source.indexOf("<", at2);
+    if (lt < 0) {
+      top().text += decodeEntities(source.slice(at2));
+      break;
+    }
+    if (lt > at2) {
+      top().text += decodeEntities(source.slice(at2, lt));
+    }
+    if (source.startsWith("<!--", lt)) {
+      const end2 = source.indexOf("-->", lt + 4);
+      if (end2 < 0) {
+        throw new Error("xml: unterminated comment");
+      }
+      at2 = end2 + 3;
+      continue;
+    }
+    if (source.startsWith("<![CDATA[", lt)) {
+      const end2 = source.indexOf("]]>", lt + 9);
+      if (end2 < 0) {
+        throw new Error("xml: unterminated CDATA");
+      }
+      top().text += source.slice(lt + 9, end2);
+      at2 = end2 + 3;
+      continue;
+    }
+    if (source.startsWith("<?", lt) || source.startsWith("<!", lt)) {
+      const end2 = source.indexOf(">", lt);
+      if (end2 < 0) {
+        throw new Error("xml: unterminated declaration");
+      }
+      at2 = end2 + 1;
+      continue;
+    }
+    const end = source.indexOf(">", lt);
+    if (end < 0) {
+      throw new Error("xml: unterminated tag");
+    }
+    const body = source.slice(lt + 1, end).trim();
+    at2 = end + 1;
+    if (body.startsWith("/")) {
+      const name2 = body.slice(1).trim();
+      const open = stack.pop();
+      if (open === void 0 || stack.length === 0 || open.name !== name2) {
+        throw new Error(`xml: unexpected closing tag </${name2}>`);
+      }
+      top().children.push({ name: open.name, attrs: open.attrs, children: open.children, text: open.text });
+      continue;
+    }
+    const selfClosing = body.endsWith("/");
+    const inner = selfClosing ? body.slice(0, -1) : body;
+    const space = inner.search(/\s/);
+    const name = space < 0 ? inner : inner.slice(0, space);
+    const attrs = space < 0 ? {} : parseAttrs(inner.slice(space));
+    if (selfClosing) {
+      top().children.push({ name, attrs, children: [], text: "" });
+    } else {
+      stack.push({ name, attrs, children: [], text: "" });
+    }
+  }
+  if (stack.length !== 1) {
+    throw new Error(`xml: <${top().name}> is never closed`);
+  }
+  const root = stack[0];
+  const first = root.children[0];
+  if (first === void 0) {
+    throw new Error("xml: no root element");
+  }
+  return first;
+};
+const child = (node, name) => node?.children.find((entry) => entry.name === name);
+const children = (node, name) => node === void 0 ? [] : node.children.filter((entry) => entry.name === name);
+const text = (node, name) => {
+  const value = child(node, name)?.text.trim();
+  return value === void 0 || value === "" ? void 0 : value;
+};
+const at = (node, ...path) => path.reduce((current, name) => child(current, name), node);
+class SaldeoError extends Error {
+  code;
+  httpStatus;
+  constructor(message, code, httpStatus) {
+    super(message);
+    this.name = "SaldeoError";
+    this.code = code;
+    this.httpStatus = httpStatus;
+  }
+}
+const saldeoUrlEncode = (value) => encodeURIComponent(value).replace(/[!'()]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`).replaceAll("%20", "+").replaceAll("%2A", "*").replaceAll("~", "%7E");
+const requestSignature = (params, apiToken) => {
+  const base = Object.keys(params).toSorted().map((key) => `${key}=${params[key] ?? ""}`).join("");
+  return createHash("md5").update(saldeoUrlEncode(base) + apiToken).digest("hex");
+};
+const newRequestId = () => `${Date.now()}-${randomUUID().slice(0, 12)}`;
+const encodeCommand = (xml) => gzipSync(Buffer.from(xml, "utf8")).toString("base64");
+const DEFAULT_PER_MINUTE = 20;
+const createSaldeoClient = (credentials, options = {}) => {
+  const fetchFn = options.fetch ?? fetch;
+  const now = options.now ?? (() => Date.now());
+  const sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const perMinute = options.perMinute ?? DEFAULT_PER_MINUTE;
+  const requestId = options.requestId ?? newRequestId;
+  const base = credentials.baseUrl.replace(/\/+$/, "");
+  const sent = [];
+  let queue = Promise.resolve();
+  const turn = async (work) => {
+    const run = queue.then(async () => {
+      while (sent.length >= perMinute) {
+        const oldest = sent[0] ?? now();
+        const wait = oldest + 6e4 - now();
+        if (wait <= 0) {
+          sent.shift();
+          continue;
+        }
+        await sleep(wait);
+      }
+      sent.push(now());
+      return work();
+    });
+    queue = run.catch(() => void 0);
+    return run;
+  };
+  const answer = async (response, operation) => {
+    const body = await response.text();
+    if (!response.ok) {
+      throw new SaldeoError(`SaldeoSMART answered HTTP ${response.status} for ${operation}: ${body.slice(0, 300)}`, void 0, response.status);
+    }
+    let root;
+    try {
+      root = parseXml(body);
+    } catch (error) {
+      throw new SaldeoError(`SaldeoSMART's answer for ${operation} is not XML: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const status = text(root, "STATUS");
+    const code = text(root, "ERROR_CODE");
+    if (status !== void 0 && status !== "OK" || code !== void 0) {
+      const message = text(root, "ERROR_MESSAGE") ?? `status ${status ?? "missing"}`;
+      throw new SaldeoError(`SaldeoSMART refused ${operation}: ${message}${code === void 0 ? "" : ` (code ${code})`}`, code, response.status);
+    }
+    return root;
+  };
+  const signed = (params) => {
+    const all = { ...params, username: credentials.username, req_id: requestId() };
+    return { ...all, req_sig: requestSignature(all, credentials.apiToken) };
+  };
+  return {
+    get: (path, params = {}) => turn(async () => {
+      const url = new URL(`${base}/${path.replace(/^\/+/, "")}`);
+      for (const [key, value] of Object.entries(signed(params))) {
+        url.searchParams.set(key, value);
+      }
+      return answer(await fetchFn(url, { method: "GET", headers: { accept: "application/xml" } }), path);
+    }),
+    post: (path, params = {}, commandXml) => turn(async () => {
+      const url = `${base}/${path.replace(/^\/+/, "")}`;
+      const form = new URLSearchParams(signed(commandXml === void 0 ? params : { ...params, command: encodeCommand(commandXml) }));
+      return answer(
+        await fetchFn(url, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/xml" },
+          body: form.toString()
+        }),
+        path
+      );
+    })
+  };
+};
+const utf8Strict = new TextDecoder("utf-8", { fatal: true });
+const sniffEncoding = (bytes) => {
+  if (bytes.length >= 2 && bytes[0] === 255 && bytes[1] === 254) {
+    return "utf-16le";
+  }
+  if (bytes.length >= 2 && bytes[0] === 254 && bytes[1] === 255) {
+    return "utf-16be";
+  }
+  const sample = bytes.subarray(0, 4096);
+  let evenZeros = 0;
+  let oddZeros = 0;
+  for (let index = 0; index < sample.length; index += 1) {
+    if (sample[index] === 0) {
+      if (index % 2 === 0) {
+        evenZeros += 1;
+      } else {
+        oddZeros += 1;
+      }
+    }
+  }
+  if (oddZeros > sample.length / 8) {
+    return "utf-16le";
+  }
+  if (evenZeros > sample.length / 8) {
+    return "utf-16be";
+  }
+  try {
+    utf8Strict.decode(bytes);
+    return "utf-8";
+  } catch {
+    return "windows-1250";
+  }
+};
+const decodeText = (bytes, encoding) => new TextDecoder(encoding).decode(bytes).replace(/^﻿/, "");
+const DELIMITERS = [";", ",", "	", "|"];
+const sniffDelimiter = (text2) => {
+  const lines = text2.split(/\r?\n/).filter((line) => line.trim() !== "").slice(0, 40);
+  let best = { delimiter: ";", score: -1 };
+  for (const delimiter of DELIMITERS) {
+    const counts = lines.map((line) => {
+      let inQuotes = false;
+      let count = 0;
+      for (const char of line) {
+        if (char === '"') {
+          inQuotes = !inQuotes;
+        } else if (char === delimiter && !inQuotes) {
+          count += 1;
+        }
+      }
+      return count;
+    });
+    const tally = /* @__PURE__ */ new Map();
+    for (const count of counts) {
+      if (count > 0) {
+        tally.set(count, (tally.get(count) ?? 0) + 1);
+      }
+    }
+    let score = 0;
+    for (const [count, lines2] of tally) {
+      score = Math.max(score, lines2 * Math.min(count, 12));
+    }
+    if (score > best.score) {
+      best = { delimiter, score };
+    }
+  }
+  return best.delimiter;
+};
+const parseRows = (text2, delimiter) => {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let inQuotes = false;
+  for (let index = 0; index < text2.length; index += 1) {
+    const char = text2[index];
+    if (inQuotes) {
+      if (char === '"') {
+        if (text2[index + 1] === '"') {
+          cell += '"';
+          index += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        cell += char;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inQuotes = true;
+    } else if (char === delimiter) {
+      row.push(cell);
+      cell = "";
+    } else if (char === "\n" || char === "\r") {
+      if (char === "\r" && text2[index + 1] === "\n") {
+        index += 1;
+      }
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+    } else {
+      cell += char;
+    }
+  }
+  if (cell !== "" || row.length > 0) {
+    row.push(cell);
+    rows.push(row);
+  }
+  return rows.map((cells) => cells.map((value) => value.trim()));
+};
+const HEADER_WORDS = /data|kwota|tytu|opis|kontrahent|rachun|saldo|waluta|nadawca|odbiorca|amount|date|title|description|account/i;
+const filled = (row) => row.filter((cell) => cell !== "").length;
+const findHeaderRow = (rows) => {
+  let widest = 0;
+  for (let index = 0; index < Math.min(rows.length, 60); index += 1) {
+    const row = rows[index];
+    if (filled(row) < 3) {
+      continue;
+    }
+    if (widest === 0) {
+      widest = index;
+    }
+    const words = row.filter((cell) => HEADER_WORDS.test(cell)).length;
+    if (words < 2) {
+      continue;
+    }
+    const following = rows.slice(index + 1).filter((next) => filled(next) > 0).slice(0, 2);
+    if (following.length === 0 || following.some((next) => filled(next) < Math.min(3, filled(row) - 1))) {
+      continue;
+    }
+    return index;
+  }
+  return widest;
+};
+const columnNames = (header) => {
+  const seen = /* @__PURE__ */ new Map();
+  return header.map((raw, index) => {
+    const base = raw.replace(/^#/, "").trim();
+    const name = base === "" ? `#${index + 1}` : base;
+    const count = seen.get(name) ?? 0;
+    seen.set(name, count + 1);
+    return count === 0 ? name : `${name} (${count + 1})`;
+  });
+};
+const normalizeDate = (raw) => {
+  if (raw === void 0) {
+    return void 0;
+  }
+  const value = raw.trim();
+  let match = /(\d{4})[-.\/](\d{1,2})[-.\/](\d{1,2})/.exec(value);
+  if (match !== null) {
+    return iso(match[1], match[2], match[3]);
+  }
+  match = /(\d{1,2})[-.\/](\d{1,2})[-.\/](\d{4})/.exec(value);
+  if (match !== null) {
+    return iso(match[3], match[2], match[1]);
+  }
+  match = /^(\d{4})(\d{2})(\d{2})$/.exec(value);
+  if (match !== null) {
+    return iso(match[1], match[2], match[3]);
+  }
+  return void 0;
+};
+const iso = (year, month, day) => {
+  const y = Number.parseInt(year ?? "", 10);
+  const m = Number.parseInt(month ?? "", 10);
+  const d = Number.parseInt(day ?? "", 10);
+  if (!(y >= 1990 && y <= 2100 && m >= 1 && m <= 12 && d >= 1 && d <= 31)) {
+    return void 0;
+  }
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+};
+const daysBetween = (from, to) => Math.round((Date.parse(to) - Date.parse(from)) / 864e5);
+const normalizeAccount = (raw) => {
+  if (raw === void 0) {
+    return void 0;
+  }
+  const compact = raw.replace(/[\s'"-]/g, "").toUpperCase();
+  if (/^\d{26}$/.test(compact)) {
+    return `PL${compact}`;
+  }
+  if (/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(compact)) {
+    return compact;
+  }
+  return void 0;
+};
+const extractAccounts = (text2) => {
+  const found = [];
+  for (const match of text2.matchAll(/\b(?:[A-Z]{2}\s?\d{2}|\d{2})(?:\s?\d{4}){6}\b/g)) {
+    const account = normalizeAccount(match[0]);
+    if (account !== void 0 && !found.includes(account)) {
+      found.push(account);
+    }
+  }
+  return found;
+};
+const NIP_WEIGHTS = [6, 5, 7, 2, 3, 4, 5, 6, 7];
+const isNip = (digits) => {
+  if (!/^\d{10}$/.test(digits)) {
+    return false;
+  }
+  const sum = NIP_WEIGHTS.reduce((total, weight, index) => total + weight * Number(digits[index]), 0);
+  return sum % 11 === Number(digits[9]);
+};
+const normalizeNip = (raw) => {
+  if (raw === void 0) {
+    return void 0;
+  }
+  const digits = raw.replace(/^PL/i, "").replace(/[\s-]/g, "");
+  return isNip(digits) ? digits : void 0;
+};
+const extractNips = (text2) => {
+  const found = [];
+  for (const match of text2.matchAll(/(?<!\d)(\d{3}[-\s]?\d{3}[-\s]?\d{2}[-\s]?\d{2}|\d{3}[-\s]?\d{2}[-\s]?\d{2}[-\s]?\d{3}|\d{10})(?!\d)/g)) {
+    const nip = normalizeNip(match[1]);
+    if (nip !== void 0 && !found.includes(nip)) {
+      found.push(nip);
+    }
+  }
+  return found;
+};
+const DIACRITICS = { ą: "a", ć: "c", ę: "e", ł: "l", ń: "n", ó: "o", ś: "s", ź: "z", ż: "z" };
+const fold = (value) => value.toLowerCase().replace(/[ąćęłńóśźż]/g, (char) => DIACRITICS[char] ?? char).normalize("NFD").replace(/[̀-ͯ]/g, "");
+const NAME_NOISE = /* @__PURE__ */ new Set(["sp", "z", "o", "oo", "s", "a", "sa", "spolka", "sc", "spj", "spk", "firma", "i", "the", "ltd", "gmbh", "przelew", "zoo"]);
+const nameTokens = (value) => value === void 0 ? [] : fold(value).split(/[^a-z0-9]+/).filter((token) => token.length >= 2 && !NAME_NOISE.has(token));
+const tokenOverlap = (left, right) => {
+  if (left.length === 0 || right.length === 0) {
+    return 0;
+  }
+  const set = new Set(right);
+  const shared = left.filter((token) => set.has(token)).length;
+  return shared / Math.min(left.length, right.length);
+};
+const has = (columns, ...needles) => needles.every((needle) => columns.some((column) => fold(column).includes(fold(needle))));
+const pickColumn = (columns, ...needles) => {
+  const folded = columns.map((column) => fold(column).replace(/\s*\(\d+\)$/, ""));
+  for (const needle of needles) {
+    const wanted = fold(needle);
+    for (const test of [(name) => name === wanted, (name) => name.startsWith(wanted), (name) => name.includes(wanted)]) {
+      const index = folded.findIndex(test);
+      if (index >= 0) {
+        return columns[index];
+      }
+    }
+  }
+  return void 0;
+};
+const DATE = ["data operacji", "data transakcji", "data ksiegowania", "data waluty", "data", "date"];
+const AMOUNT = ["kwota transakcji (waluta rachunku)", "kwota operacji", "kwota transakcji", "kwota", "amount", "value"];
+const TITLE = ["tytul", "opis transakcji", "opis operacji", "szczegoly", "opis", "title", "description"];
+const COUNTERPARTY = [
+  "dane kontrahenta",
+  "nadawca/odbiorca",
+  "nadawca / odbiorca",
+  "nadawca",
+  "odbiorca",
+  "kontrahent",
+  "nazwa odbiorcy",
+  "nazwa nadawcy",
+  "counterparty",
+  "beneficiary",
+  "payee",
+  "payer"
+];
+const ACCOUNT = ["nr rachunku", "numer rachunku", "rachunek kontrahenta", "rachunek nadawcy", "rachunek odbiorcy", "rachunek docelowy", "numer konta", "konto", "iban", "account"];
+const CURRENCY = ["waluta", "currency"];
+const guessMapping = (columns) => {
+  const date = pickColumn(columns, ...DATE);
+  const credit = pickColumn(columns, "uznania", "wplyw", "credit");
+  const debit = pickColumn(columns, "obciazenia", "wydatek", "debit");
+  const amount = credit !== void 0 && debit !== void 0 ? void 0 : pickColumn(columns, ...AMOUNT);
+  if (date === void 0 || amount === void 0 && (credit === void 0 || debit === void 0)) {
+    return void 0;
+  }
+  const title = pickColumn(columns, ...TITLE) ?? date;
+  const counterparty = pickColumn(columns, ...COUNTERPARTY);
+  const account = pickColumn(columns, ...ACCOUNT);
+  const currency = pickColumn(columns, ...CURRENCY);
+  return {
+    date,
+    ...amount === void 0 ? {} : { amount },
+    ...credit === void 0 || debit === void 0 ? {} : { credit, debit },
+    title,
+    ...counterparty === void 0 ? {} : { counterparty },
+    ...account === void 0 ? {} : { account },
+    ...currency === void 0 ? {} : { currency },
+    defaultCurrency: "PLN"
+  };
+};
+const labelled = (cells, ...labels) => {
+  for (const cell of cells) {
+    const colon = cell.indexOf(":");
+    if (colon < 0) {
+      continue;
+    }
+    const label = fold(cell.slice(0, colon)).trim();
+    if (labels.some((wanted) => label === fold(wanted))) {
+      const value = cell.slice(colon + 1).trim();
+      if (value !== "") {
+        return value;
+      }
+    }
+  }
+  return void 0;
+};
+const PRESETS = [
+  {
+    id: "mbank",
+    label: "mBank",
+    detect: (columns) => has(columns, "data operacji", "opis operacji", "kwota") && has(columns, "saldo po operacji"),
+    mapping: (columns) => {
+      const guessed = guessMapping(columns);
+      if (guessed === void 0) {
+        return void 0;
+      }
+      const title = pickColumn(columns, "tytul") ?? pickColumn(columns, "opis operacji") ?? guessed.title;
+      const counterparty = pickColumn(columns, "nadawca/odbiorca");
+      const account = pickColumn(columns, "numer konta");
+      return {
+        ...guessed,
+        title,
+        ...counterparty === void 0 ? {} : { counterparty },
+        ...account === void 0 ? {} : { account }
+      };
+    },
+    refine: (row) => {
+      const description = row["Opis operacji"] ?? "";
+      const parts = description.split(/\s{2,}/).map((part) => part.trim()).filter((part) => part !== "");
+      if (parts.length < 2 || row["Tytuł"] !== void 0) {
+        return {};
+      }
+      const counterparty = parts[1];
+      const title = parts.slice(2).join(" ");
+      return { ...counterparty === void 0 ? {} : { counterparty }, ...title === "" ? {} : { title } };
+    }
+  },
+  {
+    id: "pko",
+    label: "PKO BP",
+    detect: (columns) => has(columns, "data operacji", "data waluty", "typ transakcji", "kwota", "opis transakcji"),
+    mapping: (columns) => {
+      const guessed = guessMapping(columns);
+      return guessed === void 0 ? void 0 : { ...guessed, title: pickColumn(columns, "opis transakcji") ?? guessed.title };
+    },
+    refine: (row) => {
+      const cells = Object.values(row);
+      const counterparty = labelled(cells, "Nazwa odbiorcy", "Nazwa nadawcy", "Nazwa kontrahenta");
+      const account = labelled(cells, "Rachunek odbiorcy", "Rachunek nadawcy", "Nr rachunku");
+      const title = labelled(cells, "Tytuł", "Tytuł przelewu");
+      return {
+        ...counterparty === void 0 ? {} : { counterparty },
+        ...account === void 0 ? {} : { account },
+        ...title === void 0 ? {} : { title }
+      };
+    }
+  },
+  {
+    id: "ing",
+    label: "ING",
+    detect: (columns) => has(columns, "data transakcji", "dane kontrahenta", "tytul", "kwota transakcji"),
+    mapping: (columns) => {
+      const guessed = guessMapping(columns);
+      if (guessed === void 0) {
+        return void 0;
+      }
+      const currency = pickColumn(columns, "waluta");
+      return {
+        ...guessed,
+        amount: pickColumn(columns, "kwota transakcji (waluta rachunku)") ?? guessed.amount ?? "",
+        title: pickColumn(columns, "tytul") ?? guessed.title,
+        ...currency === void 0 ? {} : { currency }
+      };
+    }
+  },
+  {
+    id: "pekao",
+    label: "Bank Pekao",
+    detect: (columns) => has(columns, "data ksiegowania", "tytulem", "kwota operacji"),
+    mapping: (columns) => {
+      const guessed = guessMapping(columns);
+      if (guessed === void 0) {
+        return void 0;
+      }
+      const account = pickColumn(columns, "rachunek zrodlowy") ?? pickColumn(columns, "rachunek docelowy");
+      return { ...guessed, title: pickColumn(columns, "tytulem") ?? guessed.title, ...account === void 0 ? {} : { account } };
+    }
+  },
+  {
+    id: "santander",
+    label: "Santander",
+    detect: (columns) => has(columns, "data operacji", "opis", "kwota") && has(columns, "nadawca") && !has(columns, "saldo po operacji"),
+    mapping: guessMapping
+  }
+];
+const detectPreset = (columns) => PRESETS.find((preset) => preset.detect(columns));
+const presetById = (id) => id === void 0 ? void 0 : PRESETS.find((preset) => preset.id === id);
+const PREVIEW_ROWS = 8;
+const bodyRows = (rows) => {
+  const body = [];
+  for (const row of rows) {
+    const filled2 = row.filter((cell) => cell !== "").length;
+    if (filled2 < 2) {
+      if (body.length > 0) {
+        break;
+      }
+      continue;
+    }
+    body.push(row);
+  }
+  return body;
+};
+const inspectFile = (bytes, name) => {
+  const encoding = sniffEncoding(bytes);
+  const text2 = decodeText(bytes, encoding);
+  const delimiter = sniffDelimiter(text2);
+  const all = parseRows(text2, delimiter);
+  const headerRow = findHeaderRow(all);
+  const columns = columnNames(all[headerRow] ?? []);
+  const preset = detectPreset(columns);
+  const body = bodyRows(all.slice(headerRow + 1));
+  const mapping = preset?.mapping(columns) ?? guessMapping(columns);
+  return {
+    file: {
+      name,
+      bytes: bytes.length,
+      encoding,
+      delimiter,
+      headerRow,
+      columns,
+      ...preset === void 0 ? {} : { preset: preset.id },
+      rows: body.length
+    },
+    mapping,
+    preview: body.slice(0, PREVIEW_ROWS),
+    rows: body
+  };
+};
+const cellsOf = (columns, row) => {
+  const record = {};
+  columns.forEach((column, index) => {
+    record[column] = row[index] ?? "";
+  });
+  return record;
+};
+const buildTransactions = (file, rows, mapping) => {
+  const preset = presetById(file.preset);
+  const transactions = [];
+  const skipped = [];
+  rows.forEach((row, index) => {
+    const number = index + 1;
+    const cells = cellsOf(file.columns, row);
+    const date = normalizeDate(cells[mapping.date]);
+    if (date === void 0) {
+      skipped.push({ row: number, reason: `no date in "${mapping.date}"` });
+      return;
+    }
+    let amount;
+    if (mapping.amount !== void 0) {
+      amount = parseAmount(cells[mapping.amount]);
+    } else if (mapping.credit !== void 0 && mapping.debit !== void 0) {
+      const credit = parseAmount(cells[mapping.credit]) ?? 0;
+      const debit = parseAmount(cells[mapping.debit]) ?? 0;
+      amount = Math.abs(credit) - Math.abs(debit);
+    }
+    if (amount === void 0 || amount === 0) {
+      skipped.push({ row: number, reason: amount === 0 ? "zero amount" : "no readable amount" });
+      return;
+    }
+    const refined = preset?.refine?.(cells) ?? {};
+    const title = (refined.title ?? cells[mapping.title] ?? "").replace(/\s+/g, " ").trim();
+    const counterparty = (refined.counterparty ?? (mapping.counterparty === void 0 ? void 0 : cells[mapping.counterparty]))?.replace(/\s+/g, " ").trim();
+    const accountRaw = refined.account ?? (mapping.account === void 0 ? void 0 : cells[mapping.account]);
+    const counterpartyAccount = normalizeAccount(accountRaw) ?? extractAccounts(accountRaw ?? "")[0] ?? extractAccounts(title)[0];
+    const currency = (mapping.currency === void 0 ? void 0 : cells[mapping.currency]?.trim().toUpperCase()) || mapping.defaultCurrency;
+    const id = `t${number}-${createHash("sha1").update(`${date}|${amount}|${title}|${counterparty ?? ""}`).digest("hex").slice(0, 8)}`;
+    transactions.push({
+      id,
+      row: number,
+      date,
+      amount,
+      currency,
+      ...counterparty === void 0 || counterparty === "" ? {} : { counterparty },
+      ...counterpartyAccount === void 0 ? {} : { counterpartyAccount },
+      title
+    });
+  });
+  return { transactions, skipped };
+};
+const SCORE_NUMBER = 60;
+const SCORE_NUMBER_CORE = 40;
+const SCORE_AMOUNT_REMAINING = 30;
+const SCORE_AMOUNT_TOTAL = 25;
+const SCORE_AMOUNT_NEAR = 10;
+const SCORE_NIP = 25;
+const SCORE_ACCOUNT = 25;
+const SCORE_NAME = 20;
+const SCORE_DATE_PLAUSIBLE = 5;
+const PENALTY_BEFORE_ISSUE = -30;
+const PENALTY_STALE = -5;
+const CONFIDENT = 80;
+const CONFIDENT_GAP = 20;
+const AMBIGUOUS = 50;
+const KEEP = 30;
+const MAX_PROPOSALS = 5;
+const NOT_AN_INVOICE = /prowizj|op[łl]ata (za|miesi)|odsetk|\bzus\b|urz[ąa]d skarbowy|podatek|\bpit\b|\bvat-7|\bcit\b|kapitalizacj|przelew w[łl]asny|w[łl]asne konto|sp[łl]ata karty|wyp[łl]ata got|bankomat|blik p2p/i;
+const SEPARATORS = /[\/\-_.\\]/g;
+const numberForms = (number) => {
+  const full = fold(number).replace(/\s+/g, "");
+  const core = full.replace(/^[a-z]+[\/\-_.\\]*/, "");
+  return { full, fullFlat: full.replace(SEPARATORS, ""), core, coreFlat: core.replace(SEPARATORS, "") };
+};
+const containsBounded = (hay, needle) => {
+  if (needle === "") {
+    return false;
+  }
+  let from = 0;
+  for (; ; ) {
+    const index = hay.indexOf(needle, from);
+    if (index < 0) {
+      return false;
+    }
+    const before = hay[index - 1];
+    const after = hay[index + needle.length];
+    if (!(before !== void 0 && /\d/.test(before)) && !(after !== void 0 && /\d/.test(after))) {
+      return true;
+    }
+    from = index + 1;
+  }
+};
+const titleForms = (title) => {
+  const compact = fold(title).replace(/\s+/g, "");
+  return { compact, flat: compact.replace(SEPARATORS, "") };
+};
+const numberEvidence = (title, number) => {
+  const forms = numberForms(number);
+  if (forms.full.length >= 3 && (containsBounded(title.compact, forms.full) || forms.fullFlat.length >= 5 && containsBounded(title.flat, forms.fullFlat))) {
+    return { score: SCORE_NUMBER, reason: `invoice number ${number} is in the title` };
+  }
+  const groups = forms.core.split(SEPARATORS).filter((group) => group !== "");
+  if (forms.core !== forms.full && groups.length >= 2 && (containsBounded(title.compact, forms.core) || forms.coreFlat.length >= 5 && containsBounded(title.flat, forms.coreFlat))) {
+    return { score: SCORE_NUMBER_CORE, reason: `the number's digits ${forms.core} are in the title` };
+  }
+  return void 0;
+};
+const directionOf = (transaction) => transaction.amount >= 0 ? "in" : "out";
+const evidenceFor = (transaction, invoice, facts) => {
+  const reasons = [];
+  let score = 0;
+  let numberHit = false;
+  let amountExact = false;
+  let contractor = false;
+  let contractorStrong = false;
+  const number = numberEvidence(facts.title, invoice.number);
+  if (number !== void 0) {
+    score += number.score;
+    reasons.push(number.reason);
+    numberHit = true;
+  }
+  if (facts.magnitude === invoice.remaining) {
+    score += SCORE_AMOUNT_REMAINING;
+    reasons.push(invoice.paid > 0 ? "amount equals what is still owed" : "amount equals the invoice");
+    amountExact = true;
+  } else if (facts.magnitude === invoice.total) {
+    score += SCORE_AMOUNT_TOTAL;
+    reasons.push("amount equals the invoice total, though part was already paid");
+    amountExact = true;
+  } else if (Math.abs(facts.magnitude - invoice.remaining) <= Math.max(200, Math.round(invoice.remaining * 0.01))) {
+    score += SCORE_AMOUNT_NEAR;
+    reasons.push("amount is within rounding of what is owed");
+  }
+  const nip = invoice.contractor?.nip;
+  if (nip !== void 0 && facts.nips.includes(nip)) {
+    score += SCORE_NIP;
+    reasons.push(`the contractor's NIP ${nip} is in the title`);
+    contractor = true;
+    contractorStrong = true;
+  }
+  const accounts = new Set([...invoice.contractor?.bankAccounts ?? [], ...invoice.bankAccounts].map((account) => account.replace(/\s/g, "").toUpperCase()));
+  const paidFrom = facts.accounts.find((account) => accounts.has(account));
+  if (paidFrom !== void 0) {
+    score += SCORE_ACCOUNT;
+    reasons.push(`the account ${paidFrom} belongs to the contractor`);
+    contractor = true;
+    contractorStrong = true;
+  }
+  if (!contractor) {
+    const overlap = Math.max(tokenOverlap(facts.nameTokens, nameTokens(invoice.contractor?.name)), tokenOverlap(facts.titleTokens, nameTokens(invoice.contractor?.name)));
+    if (overlap >= 0.5 && invoice.contractor?.name !== void 0) {
+      score += Math.round(SCORE_NAME * overlap);
+      reasons.push(`the name matches ${invoice.contractor.name}`);
+      contractor = true;
+    }
+  }
+  if (invoice.issueDate !== "" && transaction.date < invoice.issueDate) {
+    score += PENALTY_BEFORE_ISSUE;
+    reasons.push(`paid ${daysBetween(transaction.date, invoice.issueDate)} days before the invoice was issued`);
+  } else if (invoice.dueDate !== void 0) {
+    const late = daysBetween(invoice.dueDate, transaction.date);
+    if (late >= -60 && late <= 90) {
+      score += SCORE_DATE_PLAUSIBLE;
+    } else if (late > 180) {
+      score += PENALTY_STALE;
+      reasons.push(`${late} days after the due date`);
+    }
+  }
+  return { invoice, score: Math.max(0, Math.min(100, score)), reasons, number: numberHit, amountExact, contractor, contractorStrong };
+};
+const factsOf = (transaction) => {
+  const text2 = `${transaction.counterparty ?? ""} ${transaction.title}`;
+  return {
+    magnitude: Math.abs(transaction.amount),
+    title: titleForms(transaction.title),
+    titleTokens: nameTokens(transaction.title),
+    nameTokens: nameTokens(transaction.counterparty),
+    nips: extractNips(text2),
+    accounts: [...transaction.counterpartyAccount === void 0 ? [] : [transaction.counterpartyAccount], ...extractAccounts(text2)]
+  };
+};
+const allocationFor = (evidence, magnitude) => {
+  const { invoice } = evidence;
+  if (magnitude < invoice.remaining) {
+    return { allocation: { invoiceId: invoice.id, amount: magnitude }, reasons: [`partial payment: ${invoice.remaining - magnitude} grosze would stay open`] };
+  }
+  if (magnitude > invoice.remaining) {
+    return { allocation: { invoiceId: invoice.id, amount: invoice.remaining }, reasons: [`overpays by ${magnitude - invoice.remaining} grosze`] };
+  }
+  return { allocation: { invoiceId: invoice.id, amount: magnitude }, reasons: [] };
+};
+const subsetsSummingTo = (invoices, target, maxGroup) => {
+  const sorted = [...invoices].sort((a, b) => a.issueDate.localeCompare(b.issueDate)).slice(0, 24);
+  const found = [];
+  const walk = (start, remaining, chosen) => {
+    if (found.length >= 3) {
+      return;
+    }
+    if (remaining === 0 && chosen.length >= 2) {
+      found.push([...chosen]);
+      return;
+    }
+    if (chosen.length >= maxGroup) {
+      return;
+    }
+    for (let index = start; index < sorted.length; index += 1) {
+      const invoice = sorted[index];
+      if (invoice.remaining > remaining) {
+        continue;
+      }
+      chosen.push(invoice);
+      walk(index + 1, remaining - invoice.remaining, chosen);
+      chosen.pop();
+    }
+  };
+  walk(0, target, []);
+  return found;
+};
+const matchTransaction = (transaction, pool, options = {}) => {
+  const direction = directionOf(transaction);
+  const facts = factsOf(transaction);
+  const candidates = pool.filter((invoice) => invoice.direction === direction && invoice.currency === transaction.currency && !invoice.isPaid && invoice.remaining > 0);
+  const evidence = candidates.map((invoice) => evidenceFor(transaction, invoice, facts)).filter((entry) => entry.score >= KEEP);
+  const proposals = evidence.map((entry) => {
+    const { allocation, reasons } = allocationFor(entry, facts.magnitude);
+    return { invoices: [allocation], score: entry.score, reasons: [...entry.reasons, ...reasons], by: "matcher" };
+  });
+  const exact = evidence.some((entry) => entry.amountExact);
+  if (!exact) {
+    const known = /* @__PURE__ */ new Map();
+    for (const entry of candidates.map((invoice) => evidenceFor(transaction, invoice, facts)).filter((entry2) => entry2.contractor || entry2.number)) {
+      const key = entry.invoice.contractor?.id ?? entry.invoice.contractor?.nip ?? entry.invoice.contractor?.name ?? "?";
+      known.set(key, [...known.get(key) ?? [], entry]);
+    }
+    for (const [, group] of known) {
+      for (const subset of subsetsSummingTo(group.map((entry) => entry.invoice), facts.magnitude, options.maxGroup ?? 8)) {
+        const members = group.filter((entry) => subset.includes(entry.invoice));
+        const name = subset[0]?.contractor?.name ?? "the contractor";
+        const score = Math.min(95, 70 + (members.some((entry) => entry.number) ? 15 : 0) + (members.some((entry) => entry.contractorStrong) ? 10 : 0));
+        proposals.push({
+          invoices: subset.map((invoice) => ({ invoiceId: invoice.id, amount: invoice.remaining })),
+          score,
+          reasons: [`${subset.length} open invoices of ${name} (${subset.map((invoice) => invoice.number).join(", ")}) add up to the amount`],
+          by: "matcher"
+        });
+      }
+    }
+  }
+  proposals.sort((a, b) => b.score - a.score);
+  const kept = proposals.slice(0, MAX_PROPOSALS);
+  const top = kept[0];
+  const second = kept[1];
+  let verdict;
+  if (top === void 0) {
+    verdict = "unmatched";
+  } else if (top.score >= CONFIDENT && (second === void 0 || top.score - second.score >= CONFIDENT_GAP)) {
+    verdict = "confident";
+  } else if (top.score >= AMBIGUOUS) {
+    verdict = "ambiguous";
+  } else {
+    verdict = "unmatched";
+  }
+  if (NOT_AN_INVOICE.test(transaction.title) && (top === void 0 || top.score < SCORE_NUMBER)) {
+    return { verdict: "ignored", proposals: kept };
+  }
+  return { verdict, proposals: kept };
+};
+const matchSession = (transactions, pool, options = {}) => {
+  const items = transactions.map((transaction) => ({ transactionId: transaction.id, ...matchTransaction(transaction, pool, options) }));
+  const claimed = /* @__PURE__ */ new Map();
+  const claimedBy = /* @__PURE__ */ new Map();
+  const remaining = new Map(pool.map((invoice) => [invoice.id, invoice.remaining]));
+  return items.map((item) => {
+    if (item.verdict !== "confident") {
+      return item;
+    }
+    const top = item.proposals[0];
+    if (top === void 0) {
+      return item;
+    }
+    const conflict = top.invoices.find((allocation) => (claimed.get(allocation.invoiceId) ?? 0) + allocation.amount > (remaining.get(allocation.invoiceId) ?? 0));
+    if (conflict !== void 0) {
+      const other = claimedBy.get(conflict.invoiceId) ?? "";
+      return {
+        ...item,
+        verdict: "ambiguous",
+        proposals: [{ ...top, reasons: [...top.reasons, `another transaction already claims ${conflict.invoiceId} for more than it has open (${other})`] }, ...item.proposals.slice(1)]
+      };
+    }
+    for (const allocation of top.invoices) {
+      claimed.set(allocation.invoiceId, (claimed.get(allocation.invoiceId) ?? 0) + allocation.amount);
+      claimedBy.set(allocation.invoiceId, item.transactionId);
+    }
+    return item;
+  });
+};
+const flag = (node, name) => text(node, name)?.toLowerCase() === "true";
+const bankAccountsOf = (node) => {
+  const found = [];
+  const walk = (entry) => {
+    if (entry === void 0) {
+      return;
+    }
+    for (const account of [...children(entry, "BANK_ACCOUNT"), ...entry.name === "BANK_ACCOUNT" ? [entry] : []]) {
+      const number = text(account, "NUMBER") ?? (account.children.length === 0 ? account.text.trim() : "");
+      if (number !== "" && !found.includes(number)) {
+        found.push(number);
+      }
+    }
+  };
+  walk(child(node, "BANK_ACCOUNTS"));
+  walk(child(node, "BANK_ACCOUNT"));
+  const bare = text(node, "BANK_NUMBER");
+  if (bare !== void 0 && !found.includes(bare)) {
+    found.push(bare);
+  }
+  return found;
+};
+const folderOf = (node) => ({
+  year: Number.parseInt(text(at(node, "FOLDER"), "YEAR") ?? "0", 10),
+  month: Number.parseInt(text(at(node, "FOLDER"), "MONTH") ?? "0", 10)
+});
+const parseCompanies = (root) => children(child(root, "COMPANIES"), "COMPANY").flatMap((node) => {
+  const programId = text(node, "COMPANY_PROGRAM_ID") ?? text(node, "COMPANY_ID");
+  if (programId === void 0) {
+    return [];
+  }
+  const nip = text(node, "VAT_NUMBER");
+  return [
+    {
+      programId,
+      name: text(node, "FULL_NAME") ?? text(node, "SHORT_NAME") ?? text(node, "USERNAME") ?? programId,
+      ...nip === void 0 ? {} : { nip }
+    }
+  ];
+});
+const parseContractors = (root) => children(child(root, "CONTRACTORS"), "CONTRACTOR").flatMap((node) => {
+  const id = text(node, "CONTRACTOR_ID");
+  if (id === void 0) {
+    return [];
+  }
+  const shortName = text(node, "SHORT_NAME");
+  const nip = text(node, "VAT_NUMBER") ?? text(node, "NIP");
+  return [
+    {
+      id,
+      name: text(node, "FULL_NAME") ?? shortName ?? id,
+      ...shortName === void 0 ? {} : { shortName },
+      ...nip === void 0 ? {} : { nip },
+      bankAccounts: bankAccountsOf(node),
+      customer: flag(node, "CUSTOMER"),
+      supplier: flag(node, "SUPPLIER")
+    }
+  ];
+});
+const contractorOf = (node, dictionary) => {
+  const ref = child(node, "CONTRACTOR");
+  if (ref === void 0) {
+    return void 0;
+  }
+  const id = text(ref, "CONTRACTOR_ID");
+  const known = id === void 0 ? void 0 : dictionary.get(id);
+  const nip = known?.nip ?? text(ref, "NIP");
+  if (id === void 0 && nip === void 0) {
+    return void 0;
+  }
+  return {
+    ...id === void 0 ? {} : { id },
+    ...known === void 0 ? {} : { name: known.name },
+    ...nip === void 0 ? {} : { nip },
+    bankAccounts: known?.bankAccounts ?? []
+  };
+};
+const paymentsSum = (node, list, entry) => children(child(node, list), entry).reduce((sum, payment) => sum + Math.abs(saldeoAmount(text(payment, "PAYMENT_AMOUNT"))), 0);
+const payable = ({ source, saldeoId, kind, baseDirection, node, paidFlag, paid, dictionary }) => {
+  const signedTotal = saldeoAmount(text(node, "SUM"));
+  const total = Math.abs(signedTotal);
+  const direction = signedTotal < 0 ? baseDirection === "in" ? "out" : "in" : baseDirection;
+  const remaining = paidFlag ? 0 : Math.max(0, total - Math.min(paid, total));
+  const dueDate = text(node, "PAYMENT_DATE");
+  const contractor = contractorOf(node, dictionary);
+  const sourceUrl = text(node, "SOURCE");
+  return {
+    id: `${source}:${saldeoId}`,
+    source,
+    saldeoId,
+    number: text(node, "NUMBER") ?? saldeoId,
+    direction,
+    kind,
+    corrective: flag(node, "IS_CORRECTIVE"),
+    issueDate: text(node, "ISSUE_DATE") ?? "",
+    ...dueDate === void 0 ? {} : { dueDate },
+    currency: text(node, "CURRENCY_ISO4217") ?? "PLN",
+    total,
+    paid: Math.min(paid, total),
+    remaining,
+    isPaid: paidFlag || remaining === 0,
+    ...contractor === void 0 ? {} : { contractor },
+    bankAccounts: bankAccountsOf(node),
+    folder: folderOf(node),
+    ...sourceUrl === void 0 ? {} : { sourceUrl }
+  };
+};
+const parseIssuedInvoices = (root) => {
+  const dictionary = new Map(parseContractors(root).map((contractor) => [contractor.id, contractor]));
+  const invoices = children(child(root, "INVOICES"), "INVOICE").flatMap((node) => {
+    const saldeoId = text(node, "INVOICE_ID");
+    return saldeoId === void 0 ? [] : [
+      payable({
+        source: "invoice",
+        saldeoId,
+        kind: "INVOICE",
+        baseDirection: "in",
+        node,
+        paidFlag: flag(node, "IS_INVOICE_PAID"),
+        paid: Math.max(Math.abs(saldeoAmount(text(node, "PAID_SUM"))), paymentsSum(node, "INVOICE_PAYMENTS", "INVOICE_PAYMENT")),
+        dictionary
+      })
+    ];
+  });
+  const corrective = children(child(root, "CORRECTIVE_INVOICES"), "CORRECTIVE_INVOICE").flatMap((node) => {
+    const saldeoId = text(node, "CORRECTIVE_INVOICE_ID");
+    return saldeoId === void 0 ? [] : [
+      payable({
+        source: "invoice",
+        saldeoId: `k${saldeoId}`,
+        kind: "CORRECTIVE_INVOICE",
+        baseDirection: "in",
+        node,
+        paidFlag: flag(node, "IS_INVOICE_PAID"),
+        paid: Math.max(Math.abs(saldeoAmount(text(node, "PAID_SUM"))), paymentsSum(node, "INVOICE_PAYMENTS", "INVOICE_PAYMENT")),
+        dictionary
+      })
+    ];
+  });
+  return [...invoices, ...corrective];
+};
+const documentDirection = (type) => {
+  if (type === void 0) {
+    return void 0;
+  }
+  if (/SALE/.test(type)) {
+    return "in";
+  }
+  if (/COST|MATERIAL/.test(type)) {
+    return "out";
+  }
+  return void 0;
+};
+const parseDocuments = (root) => {
+  const dictionary = new Map(parseContractors(root).map((contractor) => [contractor.id, contractor]));
+  return children(child(root, "DOCUMENTS"), "DOCUMENT").flatMap((node) => {
+    const saldeoId = text(node, "DOCUMENT_ID");
+    const type = text(at(node, "DOCUMENT_TYPE"), "TYPE");
+    const baseDirection = documentDirection(type);
+    if (saldeoId === void 0 || baseDirection === void 0) {
+      return [];
+    }
+    return [
+      payable({
+        source: "document",
+        saldeoId,
+        kind: type ?? "DOCUMENT",
+        baseDirection,
+        node,
+        paidFlag: flag(node, "IS_DOCUMENT_PAID"),
+        paid: paymentsSum(node, "DOCUMENT_PAYMENTS", "DOCUMENT_PAYMENT"),
+        dictionary
+      })
+    ];
+  });
+};
+const parseIssuedIdList = (root) => ({
+  invoices: children(child(root, "INVOICES"), "INVOICE_ID").map((node) => node.text.trim()),
+  corrective: children(child(root, "CORRECTIVE_INVOICES"), "CORRECTIVE_INVOICE_ID").map((node) => node.text.trim())
+});
+const DOCUMENT_ID_GROUPS = {
+  INVOICES_COST: "INVOICE_COST",
+  INVOICES_MATERIAL: "INVOICE_MATERIAL",
+  INVOICES_SALE: "INVOICE_SALE"
+};
+const parseDocumentIdList = (root) => {
+  const result = {};
+  for (const [group, entry] of Object.entries(DOCUMENT_ID_GROUPS)) {
+    result[group] = children(child(root, group), entry).map((node) => node.text.trim());
+  }
+  return result;
+};
+const settledRefs = (node, list, entry, idName) => children(child(node, list), entry).map((ref) => ({
+  id: text(ref, idName) ?? "",
+  number: text(ref, "NUMBER") ?? "",
+  type: text(ref, "TYPE") ?? "",
+  amountSettled: Math.abs(saldeoAmount(text(ref, "AMOUNT_SETTLED")))
+}));
+const operationOf = (node) => {
+  const value = Math.abs(saldeoAmount(text(node, "VALUE")));
+  const debit = text(node, "DEBIT_CREDIT") === "DEBIT";
+  const matching = at(node, "SALDEOSMART_MATCHING", "CONTRACTOR");
+  const settlement = child(node, "TRANSACTION_SETTLEMENT");
+  const account = text(node, "BANK_OPERATION_ACCOUNT_NUMBER");
+  const contractorId = text(matching, "CONTRACTOR_ID");
+  const contractorNip = text(matching, "NIP");
+  const remaining = text(settlement, "REMAIN_AMOUNT_TO_BE_SETTLED");
+  return {
+    date: text(node, "OPERATION_DATE") ?? text(node, "ACCOUNTING_DATE") ?? "",
+    type: text(node, "BANK_OPERATION_TYPE") ?? "",
+    description: text(node, "OPERATION_DESCRIPTION") ?? "",
+    amount: debit ? -value : value,
+    currency: text(node, "CURRENCY_ISO4217") ?? "PLN",
+    ...account === void 0 ? {} : { account },
+    ...contractorId === void 0 ? {} : { contractorId },
+    ...contractorNip === void 0 ? {} : { contractorNip },
+    approved: flag(node, "IS_APPROVED"),
+    ...remaining === void 0 ? {} : { remainingToSettle: Math.abs(saldeoAmount(remaining)) },
+    settled: [
+      ...settledRefs(settlement, "SETTLED_INVOICES", "SETTLED_INVOICE", "INVOICE_ID"),
+      ...settledRefs(settlement, "SETTLED_DOCUMENTS", "SETTLED_DOCUMENT", "DOCUMENT_ID")
+    ]
+  };
+};
+const parseBankStatements = (root) => children(child(root, "BANK_STATEMENTS"), "BANK_STATEMENT").map((node) => {
+  const filename = text(node, "BANK_STATEMENT_FILENAME");
+  return {
+    account: text(node, "BANK_STATEMENT_ACCOUNT_NUMBER") ?? "",
+    currency: text(node, "CURRENCY_ISO4217") ?? "PLN",
+    from: text(node, "BANK_STATEMENT_PERIOD_FROM") ?? "",
+    to: text(node, "BANK_STATEMENT_PERIOD_TO") ?? "",
+    status: text(node, "STATUS") ?? "",
+    ...filename === void 0 ? {} : { filename },
+    folder: folderOf(node),
+    operations: children(child(node, "BANK_OPERATIONS"), "BANK_OPERATION").map(operationOf)
+  };
+});
+const ID_BATCH = 50;
+const folderXml = (month) => `<ROOT><FOLDER><YEAR>${month.year}</YEAR><MONTH>${month.month}</MONTH></FOLDER></ROOT>`;
+const batches = (items, size) => {
+  const out = [];
+  for (let index = 0; index < items.length; index += size) {
+    out.push(items.slice(index, index + size));
+  }
+  return out;
+};
+const listCompanies = async (client) => parseCompanies(await client.get("api/xml/1.0/company/list"));
+const listContractors = async (client, company) => parseContractors(await client.get("api/xml/1.23/contractor/list", { company_program_id: company }));
+const listIssuedInvoicesForMonth = async (client, company, month) => {
+  const list = parseIssuedIdList(await client.post("api/xml/3.0/invoice/getidlist", { company_program_id: company }, folderXml(month)));
+  const found = [];
+  const requests = [
+    ...batches([...new Set(list.invoices)], ID_BATCH).map((ids) => `<ROOT><INVOICES>${ids.map((id) => `<INVOICE_ID>${encodeXml(id)}</INVOICE_ID>`).join("")}</INVOICES></ROOT>`),
+    ...batches([...new Set(list.corrective)], ID_BATCH).map(
+      (ids) => `<ROOT><CORRECTIVE_INVOICES>${ids.map((id) => `<CORRECTIVE_INVOICE_ID>${encodeXml(id)}</CORRECTIVE_INVOICE_ID>`).join("")}</CORRECTIVE_INVOICES></ROOT>`
+    )
+  ];
+  for (const xml of requests) {
+    found.push(...parseIssuedInvoices(await client.post("api/xml/3.0/invoice/listbyid", { company_program_id: company }, xml)));
+  }
+  return found;
+};
+const listDocumentsForMonth = async (client, company, month) => {
+  const list = parseDocumentIdList(await client.post("api/xml/3.0/document/getidlist", { company_program_id: company }, folderXml(month)));
+  const flat = Object.keys(DOCUMENT_ID_GROUPS).flatMap((group) => [...new Set(list[group])].map((id) => ({ group, id })));
+  const found = [];
+  for (const batch of batches(flat, ID_BATCH)) {
+    const groups = Object.keys(DOCUMENT_ID_GROUPS).map((group) => {
+      const members = batch.filter((entry) => entry.group === group);
+      return members.length === 0 ? "" : `<${group}>${members.map((entry) => `<${DOCUMENT_ID_GROUPS[group]}>${encodeXml(entry.id)}</${DOCUMENT_ID_GROUPS[group]}>`).join("")}</${group}>`;
+    }).join("");
+    found.push(...parseDocuments(await client.post("api/xml/3.1/document/listbyid", { company_program_id: company }, `<ROOT>${groups}</ROOT>`)));
+  }
+  return found;
+};
+const searchDocuments = async (client, company, search) => {
+  const fields = [
+    ...search.number === void 0 ? [] : [`<NUMBER>${encodeXml(search.number)}</NUMBER>`],
+    ...search.nip === void 0 ? [] : [`<NIP>${encodeXml(search.nip)}</NIP>`]
+  ];
+  if (fields.length === 0) {
+    return [];
+  }
+  return parseDocuments(
+    await client.post(
+      "api/xml/3.1/document/search",
+      { company_program_id: company },
+      `<ROOT><SEARCH_POLICY>BY_FIELDS</SEARCH_POLICY><FIELDS>${fields.join("")}</FIELDS></ROOT>`
+    )
+  );
+};
+const listBankStatements = async (client, company) => parseBankStatements(await client.get("api/xml/2.18/bank_statement/list", { company_program_id: company, policy: "SALDEO" }));
+const listPayablesForMonth = async (client, company, month, scopes) => {
+  const pools = [
+    ...scopes.invoices ? await listIssuedInvoicesForMonth(client, company, month) : [],
+    ...scopes.documents ? await listDocumentsForMonth(client, company, month) : []
+  ];
+  return pools;
+};
+const dedupeInvoices = (invoices) => {
+  const seen = /* @__PURE__ */ new Map();
+  for (const invoice of invoices) {
+    seen.set(invoice.id, invoice);
+  }
+  return [...seen.values()];
+};
+const openOnly = (invoices) => invoices.filter((invoice) => !invoice.isPaid && invoice.remaining > 0);
+const RECORDS = [".intentic", "records", "saldeo"];
+const SAFE_SEGMENT = /^[a-z0-9][a-z0-9-]*$/;
+const safe = (segment, what) => {
+  if (!SAFE_SEGMENT.test(segment)) {
+    throw new Error(`${what} "${segment}" is not a safe path segment`);
+  }
+  return segment;
+};
+const saldeoRoot = (workspaceRoot) => join(workspaceRoot, ...RECORDS);
+const accountDir = (workspaceRoot, account) => join(saldeoRoot(workspaceRoot), safe(account, "account"));
+const sessionPath = (workspaceRoot, account, id) => join(accountDir(workspaceRoot, account), "sessions", `${safe(id, "session id")}.json`);
+const ledgerPath = (workspaceRoot, account) => join(accountDir(workspaceRoot, account), "ledger.json");
+class StoreConflict extends Error {
+  constructor(what) {
+    super(`${what} changed under you; read it again and retry`);
+    this.name = "StoreConflict";
+  }
+}
+const readJson = async (path) => {
+  try {
+    return JSON.parse(await readFile(path, "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return void 0;
+    }
+    throw error;
+  }
+};
+const writeJsonAtomic = async (path, value) => {
+  await mkdir(dirname(path), { recursive: true });
+  const temp = `${path}.${process.pid}-${randomBytes(4).toString("hex")}.tmp`;
+  await writeFile(temp, `${JSON.stringify(value, void 0, 2)}
+`);
+  await rename(temp, path);
+};
+const newSessionId = (now = /* @__PURE__ */ new Date()) => `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, "0")}${String(now.getUTCDate()).padStart(2, "0")}-${randomBytes(3).toString("hex")}`;
+const countsOf = (session) => {
+  const counts = {
+    transactions: session.transactions.length,
+    confident: 0,
+    ambiguous: 0,
+    unmatched: 0,
+    ignored: 0,
+    proposedByAgent: 0,
+    confirmed: 0,
+    rejected: 0,
+    skipped: 0,
+    marked: 0,
+    markFailed: 0,
+    awaiting: 0
+  };
+  for (const item of session.items) {
+    if (item.decision === void 0) {
+      counts[item.verdict] += 1;
+      if (item.proposals.some((proposal) => proposal.by === "agent")) {
+        counts.proposedByAgent += 1;
+      }
+      if (item.proposals.length > 0 && item.verdict !== "ignored") {
+        counts.awaiting += 1;
+      }
+      continue;
+    }
+    counts[item.decision.status] += 1;
+    if (item.marking?.status === "ok") {
+      counts.marked += 1;
+    } else if (item.marking?.status === "failed") {
+      counts.markFailed += 1;
+    }
+  }
+  return counts;
+};
+const summaryOf = (session) => ({
+  id: session.id,
+  account: session.account,
+  company: session.company,
+  createdAt: session.createdAt,
+  updatedAt: session.updatedAt,
+  file: session.file,
+  mapped: session.mapping !== void 0,
+  counts: countsOf(session)
+});
+const readSession = async (workspaceRoot, account, id) => readJson(sessionPath(workspaceRoot, account, id));
+const listSessions = async (workspaceRoot, account) => {
+  let names;
+  try {
+    names = await readdir(join(accountDir(workspaceRoot, account), "sessions"));
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+  const sessions = await Promise.all(names.filter((name) => name.endsWith(".json")).map((name) => readJson(join(accountDir(workspaceRoot, account), "sessions", name))));
+  return sessions.filter((session) => session !== void 0).map(summaryOf).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+};
+const writeSession = async (workspaceRoot, session, now = /* @__PURE__ */ new Date()) => {
+  const path = sessionPath(workspaceRoot, session.account, session.id);
+  const stored = await readJson(path);
+  if ((stored?.version ?? 0) !== session.version) {
+    throw new StoreConflict(`session ${session.id}`);
+  }
+  const next = { ...session, version: session.version + 1, updatedAt: now.toISOString() };
+  await writeJsonAtomic(path, next);
+  return next;
+};
+const updateSession = async (workspaceRoot, account, id, edit) => {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const current = await readSession(workspaceRoot, account, id);
+    if (current === void 0) {
+      throw new Error(`no session ${id} for ${account}`);
+    }
+    try {
+      return await writeSession(workspaceRoot, edit(current));
+    } catch (error) {
+      if (!(error instanceof StoreConflict) || attempt === 4) {
+        throw error;
+      }
+    }
+  }
+  throw new StoreConflict(`session ${id}`);
+};
+const deleteSession = async (workspaceRoot, account, id) => {
+  await rm(sessionPath(workspaceRoot, account, id), { force: true });
+};
+const EMPTY_LEDGER = { version: 0, entries: [] };
+const readLedger = async (workspaceRoot, account) => await readJson(ledgerPath(workspaceRoot, account)) ?? EMPTY_LEDGER;
+const updateLedger = async (workspaceRoot, account, edit) => {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const current = await readLedger(workspaceRoot, account);
+    const next = { ...edit(current), version: current.version + 1 };
+    const stored = await readLedger(workspaceRoot, account);
+    if (stored.version !== current.version) {
+      continue;
+    }
+    await writeJsonAtomic(ledgerPath(workspaceRoot, account), next);
+    return next;
+  }
+  throw new StoreConflict(`ledger for ${account}`);
+};
+const upsertLedgerEntries = (ledger, entries) => {
+  const byId = new Map(ledger.entries.map((entry) => [entry.id, entry]));
+  for (const entry of entries) {
+    byId.set(entry.id, entry);
+  }
+  return { ...ledger, entries: [...byId.values()].sort((a, b) => b.confirmedAt.localeCompare(a.confirmedAt)) };
+};
+const ledgerEntryId = (sessionId, transactionId) => `${sessionId}:${transactionId}`;
+const POOL_TTL_MS = 5 * 6e4;
+class ScopeRefused extends Error {
+  constructor(what) {
+    super(`the SaldeoSMART card does not allow ${what}; turn it on in Capabilities`);
+    this.name = "ScopeRefused";
+  }
+}
+class NotFound extends Error {
+  constructor(what) {
+    super(what);
+    this.name = "NotFound";
+  }
+}
+class BadRequest extends Error {
+  constructor(what) {
+    super(what);
+    this.name = "BadRequest";
+  }
+}
+const on = (value) => value === void 0 || value === "" || value === "on" || value === "true";
+const scopesOf = (config) => ({
+  documents: on(config["documents"]),
+  invoices: on(config["invoices"]),
+  bankStatements: on(config["bankStatements"]),
+  propose: on(config["propose"])
+});
+const DEFAULT_LOOKBACK_MONTHS = 6;
+const DEFAULT_LIST_MONTHS = 6;
+const monthsBetween = (from, to) => {
+  const start = /* @__PURE__ */ new Date(`${from.slice(0, 7)}-01T00:00:00Z`);
+  const end = /* @__PURE__ */ new Date(`${to.slice(0, 7)}-01T00:00:00Z`);
+  const months = [];
+  for (let cursor = start; cursor <= end; cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 1))) {
+    months.push({ year: cursor.getUTCFullYear(), month: cursor.getUTCMonth() + 1 });
+  }
+  return months;
+};
+const shiftMonths = (date, by) => {
+  const base = /* @__PURE__ */ new Date(`${date.slice(0, 7)}-01T00:00:00Z`);
+  const shifted = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() + by, 1));
+  return shifted.toISOString().slice(0, 10);
+};
+const monthsFor = (transactions, lookback, now) => {
+  const dates = transactions.map((transaction) => transaction.date).sort();
+  const first = dates[0] ?? now.toISOString().slice(0, 10);
+  const last = dates[dates.length - 1] ?? first;
+  return monthsBetween(shiftMonths(first, -lookback), last);
+};
+const recentMonthsFrom = (count, now) => monthsBetween(shiftMonths(now.toISOString().slice(0, 10), -(count - 1)), now.toISOString().slice(0, 10));
+const AGENT_PROPOSAL_SCORE = 75;
+const createService = (deps) => {
+  const now = deps.now ?? (() => /* @__PURE__ */ new Date());
+  const clients = /* @__PURE__ */ new Map();
+  const clientFor = async (account) => {
+    const connection = await deps.connection(account);
+    const key = `${connection.credentials.baseUrl}|${connection.credentials.username}|${connection.credentials.apiToken}`;
+    const cached = clients.get(account);
+    if (cached !== void 0 && cached.key === key) {
+      return { client: cached.client, connection };
+    }
+    const client = createSaldeoClient(connection.credentials, deps.clientOptions ?? {});
+    clients.set(account, { key, client });
+    return { client, connection };
+  };
+  const require2 = (scopes, scope, what) => {
+    if (!scopes[scope]) {
+      throw new ScopeRefused(what);
+    }
+  };
+  const sessionOf = async (account, id) => {
+    const session = await readSession(deps.workspaceRoot, account, id);
+    if (session === void 0) {
+      throw new NotFound(`no session ${id} for ${account}`);
+    }
+    return session;
+  };
+  const pool = /* @__PURE__ */ new Map();
+  const payablesFor = async (account, company, months, fresh = false) => {
+    const { client, connection } = await clientFor(account);
+    if (!connection.scopes.invoices && !connection.scopes.documents) {
+      throw new ScopeRefused("reading invoices or documents");
+    }
+    const scopeKey = `${connection.scopes.invoices ? "i" : ""}${connection.scopes.documents ? "d" : ""}`;
+    const found = [];
+    for (const month of months) {
+      const key = `${account}|${company}|${month.year}-${month.month}|${scopeKey}`;
+      const cached = pool.get(key);
+      if (!fresh && cached !== void 0 && now().getTime() - cached.at < POOL_TTL_MS) {
+        found.push(...cached.invoices);
+        continue;
+      }
+      const invoices = await listPayablesForMonth(client, company, month, connection.scopes);
+      pool.set(key, { at: now().getTime(), invoices });
+      found.push(...invoices);
+    }
+    return dedupeInvoices(found);
+  };
+  const transactionOf = (session, transactionId) => {
+    const transaction = session.transactions.find((entry) => entry.id === transactionId);
+    if (transaction === void 0) {
+      throw new NotFound(`no transaction ${transactionId} in session ${session.id}`);
+    }
+    return transaction;
+  };
+  const validAllocations = (session, allocations) => {
+    for (const allocation of allocations) {
+      if (!session.invoices.some((invoice) => invoice.id === allocation.invoiceId)) {
+        throw new BadRequest(`invoice ${allocation.invoiceId} is not in this session's pool`);
+      }
+      if (!Number.isInteger(allocation.amount) || allocation.amount <= 0) {
+        throw new BadRequest(`allocation for ${allocation.invoiceId} must be a positive amount in grosze`);
+      }
+    }
+  };
+  const withItem = (session, transactionId, edit) => {
+    transactionOf(session, transactionId);
+    const items = session.items.some((item) => item.transactionId === transactionId) ? session.items.map((item) => item.transactionId === transactionId ? edit(item) : item) : [...session.items, edit({ transactionId, verdict: "unmatched", proposals: [] })];
+    return { ...session, items };
+  };
+  const ledgerEntryFor = (session, item, decision) => ({
+    id: ledgerEntryId(session.id, item.transactionId),
+    sessionId: session.id,
+    company: session.company,
+    transaction: transactionOf(session, item.transactionId),
+    invoices: decision.invoices.map((allocation) => {
+      const invoice = session.invoices.find((candidate) => candidate.id === allocation.invoiceId);
+      return { ...allocation, number: invoice?.number ?? allocation.invoiceId, source: invoice?.source ?? "invoice", saldeoId: invoice?.saldeoId ?? allocation.invoiceId };
+    }),
+    confirmedAt: decision.at,
+    ...item.marking === void 0 ? {} : { marking: item.marking },
+    ...item.verification === void 0 ? {} : { verification: item.verification }
+  });
+  const syncLedger = async (session, transactionIds) => {
+    await updateLedger(deps.workspaceRoot, session.account, (ledger) => {
+      const removed = new Set(transactionIds.map((transactionId) => ledgerEntryId(session.id, transactionId)));
+      const kept = ledger.entries.filter((entry) => !removed.has(entry.id));
+      const added = session.items.filter((item) => transactionIds.includes(item.transactionId) && item.decision?.status === "confirmed").map((item) => ledgerEntryFor(session, item, item.decision));
+      return upsertLedgerEntries({ ...ledger, entries: kept }, added);
+    });
+  };
+  const service = {
+    status: async (account) => {
+      const connection = await deps.connection(account);
+      const base = {
+        account,
+        username: connection.credentials.username,
+        ...connection.company === void 0 ? {} : { company: connection.company },
+        scopes: connection.scopes,
+        reachable: false
+      };
+      try {
+        const { client } = await clientFor(account);
+        const companies = await listCompanies(client);
+        return { ...base, reachable: true, detail: `${companies.length} compan${companies.length === 1 ? "y" : "ies"} visible` };
+      } catch (error) {
+        return { ...base, detail: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    companies: async (account) => {
+      const { client } = await clientFor(account);
+      return listCompanies(client);
+    },
+    contractors: async (account, company) => {
+      const { client, connection } = await clientFor(account);
+      if (!connection.scopes.invoices && !connection.scopes.documents) {
+        throw new ScopeRefused("reading invoices or documents");
+      }
+      return listContractors(client, company);
+    },
+    resolveCompany: async (account, wanted) => {
+      if (wanted !== void 0 && wanted !== "") {
+        return wanted;
+      }
+      const connection = await deps.connection(account);
+      if (connection.company !== void 0) {
+        return connection.company;
+      }
+      const companies = await service.companies(account);
+      const [only, second] = companies;
+      if (only !== void 0 && second === void 0) {
+        return only.programId;
+      }
+      throw new BadRequest(
+        companies.length === 0 ? "this login sees no companies in SaldeoSMART" : `say which company: ${companies.map((company) => `${company.programId} (${company.name})`).join(", ")}`
+      );
+    },
+    payables: async (account, company, options = {}) => {
+      const all = await payablesFor(account, company, recentMonthsFrom(options.months ?? DEFAULT_LIST_MONTHS, now()));
+      return options.open === false ? all : openOnly(all);
+    },
+    search: async (account, company, search) => {
+      const { client, connection } = await clientFor(account);
+      require2(connection.scopes, "documents", "reading the document archive");
+      return searchDocuments(client, company, search);
+    },
+    statements: async (account, company) => {
+      const { client, connection } = await clientFor(account);
+      require2(connection.scopes, "bankStatements", "reading bank statements");
+      return listBankStatements(client, company);
+    },
+    sessions: (account) => listSessions(deps.workspaceRoot, account),
+    session: sessionOf,
+    importFile: async (account, company, name, bytes) => {
+      await deps.connection(account);
+      if (company === "") {
+        throw new BadRequest("a company is required");
+      }
+      const inspection = inspectFile(bytes, name);
+      const at2 = now().toISOString();
+      const session = {
+        id: newSessionId(now()),
+        account,
+        company,
+        createdAt: at2,
+        updatedAt: at2,
+        version: 0,
+        file: inspection.file,
+        rows: inspection.rows,
+        ...inspection.mapping === void 0 ? {} : { mapping: inspection.mapping },
+        transactions: [],
+        invoices: [],
+        items: [],
+        agentRuns: []
+      };
+      return writeSession(deps.workspaceRoot, session, now());
+    },
+    applyMapping: async (account, id, mapping, lookbackMonths = DEFAULT_LOOKBACK_MONTHS) => {
+      const current = await sessionOf(account, id);
+      for (const role of ["date", "title"]) {
+        if (!current.file.columns.includes(mapping[role])) {
+          throw new BadRequest(`mapping.${role} names "${mapping[role]}", which is not a column of this file`);
+        }
+      }
+      if (mapping.amount === void 0 && (mapping.credit === void 0 || mapping.debit === void 0)) {
+        throw new BadRequest("mapping needs an amount column, or a credit and a debit column");
+      }
+      const { transactions, skipped } = buildTransactions(current.file, current.rows, mapping);
+      const invoices = await payablesFor(account, current.company, monthsFor(transactions, lookbackMonths, now()));
+      const decided = new Map(current.items.filter((item) => item.decision !== void 0).map((item) => [item.transactionId, item]));
+      const items = matchSession(transactions, openOnly(invoices)).map((item) => decided.get(item.transactionId) ?? item);
+      const session = await writeSession(
+        deps.workspaceRoot,
+        { ...current, mapping, transactions, invoices, invoicesAt: now().toISOString(), items },
+        now()
+      );
+      return { session, skipped };
+    },
+    rematch: async (account, id) => {
+      const current = await sessionOf(account, id);
+      if (current.mapping === void 0) {
+        throw new BadRequest("apply a mapping first");
+      }
+      const invoices = await payablesFor(account, current.company, monthsFor(current.transactions, DEFAULT_LOOKBACK_MONTHS, now()), true);
+      const fresh = matchSession(current.transactions, openOnly(invoices));
+      const items = fresh.map((item) => {
+        const previous = current.items.find((candidate) => candidate.transactionId === item.transactionId);
+        if (previous?.decision !== void 0) {
+          return previous;
+        }
+        const agent = previous?.proposals.filter((proposal) => proposal.by === "agent") ?? [];
+        return agent.length === 0 ? item : { ...item, proposals: [...agent, ...item.proposals] };
+      });
+      return writeSession(deps.workspaceRoot, { ...current, invoices, invoicesAt: now().toISOString(), items }, now());
+    },
+    decide: async (account, id, input) => {
+      const session = await updateSession(deps.workspaceRoot, account, id, (current) => {
+        const item = current.items.find((candidate) => candidate.transactionId === input.transactionId);
+        if (input.status === "cleared") {
+          return withItem(current, input.transactionId, (existing) => {
+            const { decision: decision2, marking, verification, ...rest } = existing;
+            return rest;
+          });
+        }
+        const invoices = input.invoices ?? (input.status === "confirmed" ? item?.proposals[0]?.invoices ?? [] : []);
+        if (input.status === "confirmed") {
+          if (invoices.length === 0) {
+            throw new BadRequest("confirming needs at least one invoice");
+          }
+          validAllocations(current, invoices);
+        }
+        const decision = { status: input.status, invoices, at: now().toISOString(), ...input.note === void 0 ? {} : { note: input.note } };
+        return withItem(current, input.transactionId, (existing) => {
+          const { marking, verification, ...rest } = existing;
+          return { ...rest, decision };
+        });
+      });
+      await syncLedger(session, [input.transactionId]);
+      return session;
+    },
+    confirmAll: async (account, id) => {
+      const confirmed = [];
+      const session = await updateSession(deps.workspaceRoot, account, id, (current) => ({
+        ...current,
+        items: current.items.map((item) => {
+          const top = item.proposals[0];
+          if (item.decision !== void 0 || item.verdict !== "confident" || top === void 0 || top.invoices.length === 0) {
+            return item;
+          }
+          confirmed.push(item.transactionId);
+          return { ...item, decision: { status: "confirmed", invoices: top.invoices, at: now().toISOString() } };
+        })
+      }));
+      await syncLedger(session, confirmed);
+      return session;
+    },
+    propose: async (account, id, input) => {
+      const connection = await deps.connection(account);
+      require2(connection.scopes, "propose", "the agent proposing matches");
+      if (input.invoices.length === 0) {
+        throw new BadRequest("a proposal needs at least one invoice; use skip for a transaction that pays none");
+      }
+      return updateSession(deps.workspaceRoot, account, id, (current) => {
+        validAllocations(current, input.invoices);
+        const proposal = {
+          invoices: input.invoices,
+          score: Math.max(0, Math.min(100, Math.round(input.confidence ?? AGENT_PROPOSAL_SCORE))),
+          reasons: input.reasons,
+          by: "agent",
+          ...input.note === void 0 ? {} : { note: input.note }
+        };
+        return withItem(current, input.transactionId, (item) => {
+          if (item.decision !== void 0) {
+            throw new BadRequest(`transaction ${input.transactionId} is already decided (${item.decision.status})`);
+          }
+          return { ...item, verdict: item.verdict === "ignored" ? "ambiguous" : item.verdict === "unmatched" ? "ambiguous" : item.verdict, proposals: [proposal, ...item.proposals.filter((existing) => existing.by !== "agent")] };
+        });
+      });
+    },
+    skip: async (account, id, transactionId, reason) => {
+      const connection = await deps.connection(account);
+      require2(connection.scopes, "propose", "the agent proposing matches");
+      return updateSession(
+        deps.workspaceRoot,
+        account,
+        id,
+        (current) => withItem(current, transactionId, (item) => {
+          if (item.decision !== void 0) {
+            throw new BadRequest(`transaction ${transactionId} is already decided (${item.decision.status})`);
+          }
+          return { ...item, verdict: "ignored", proposals: [{ invoices: [], score: 0, reasons: [reason], by: "agent" }, ...item.proposals.filter((existing) => existing.by !== "agent")] };
+        })
+      );
+    },
+    recordMarking: async (account, id, input) => {
+      const session = await updateSession(
+        deps.workspaceRoot,
+        account,
+        id,
+        (current) => withItem(current, input.transactionId, (item) => {
+          if (item.decision?.status !== "confirmed") {
+            throw new BadRequest(`transaction ${input.transactionId} is not confirmed, so there is nothing to mark`);
+          }
+          const marking = {
+            status: input.status,
+            at: now().toISOString(),
+            ...input.conversationId === void 0 ? {} : { conversationId: input.conversationId },
+            ...input.note === void 0 ? {} : { note: input.note }
+          };
+          return { ...item, marking };
+        })
+      );
+      await syncLedger(session, [input.transactionId]);
+      return session;
+    },
+    verify: async (account, id) => {
+      const current = await sessionOf(account, id);
+      const confirmed = current.items.filter((item) => item.decision?.status === "confirmed");
+      if (confirmed.length === 0) {
+        return current;
+      }
+      const invoiceIds = new Set(confirmed.flatMap((item) => item.decision?.invoices.map((allocation) => allocation.invoiceId) ?? []));
+      const months = /* @__PURE__ */ new Map();
+      for (const invoice of current.invoices.filter((candidate) => invoiceIds.has(candidate.id))) {
+        months.set(`${invoice.folder.year}-${invoice.folder.month}`, invoice.folder);
+      }
+      const fresh = new Map((await payablesFor(account, current.company, [...months.values()], true)).map((invoice) => [invoice.id, invoice]));
+      const at2 = now().toISOString();
+      const items = current.items.map((item) => {
+        if (item.decision?.status !== "confirmed") {
+          return item;
+        }
+        const paidInSaldeo = item.decision.invoices.every((allocation) => {
+          const before = current.invoices.find((candidate) => candidate.id === allocation.invoiceId);
+          const after = fresh.get(allocation.invoiceId);
+          return after !== void 0 && (after.isPaid || before !== void 0 && after.remaining < before.remaining);
+        });
+        return { ...item, verification: { paidInSaldeo, at: at2 } };
+      });
+      const session = await writeSession(deps.workspaceRoot, { ...current, items }, now());
+      await syncLedger(
+        session,
+        confirmed.map((item) => item.transactionId)
+      );
+      return session;
+    },
+    ledger: (account) => readLedger(deps.workspaceRoot, account),
+    deleteSession: async (account, id) => {
+      const session = await readSession(deps.workspaceRoot, account, id);
+      if (session === void 0) {
+        return;
+      }
+      await deleteSession(deps.workspaceRoot, account, id);
+      await updateLedger(deps.workspaceRoot, account, (ledger) => ({ ...ledger, entries: ledger.entries.filter((entry) => entry.sessionId !== id) }));
+    },
+    unmarked: (session) => session.items.filter((item) => item.decision?.status === "confirmed" && item.marking?.status !== "ok").map((item) => ({
+      item,
+      transaction: transactionOf(session, item.transactionId),
+      invoices: (item.decision?.invoices ?? []).map((allocation) => ({ allocation, invoice: session.invoices.find((invoice) => invoice.id === allocation.invoiceId) }))
+    }))
+  };
+  return service;
+};
+const CONNECTION_TTL_MS = 6e4;
+const TITLE_MAX = 80;
+const RUN_ROLE = "saldeo-reconcile";
+const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+const statusOf = (error) => {
+  if (error instanceof NotFound) {
+    return 404;
+  }
+  if (error instanceof BadRequest) {
+    return 400;
+  }
+  if (error instanceof ScopeRefused) {
+    return 403;
+  }
+  if (error instanceof StoreConflict) {
+    return 409;
+  }
+  if (error instanceof SaldeoError) {
+    return 502;
+  }
+  return 500;
+};
+let sequence = 0;
+const mintConversationId = (kind, sessionId, now) => `saldeo-${kind}-${sessionId.replaceAll(/[^a-z0-9-]/g, "-").slice(0, 24)}-${now.toString(36)}${(sequence++).toString(36)}`;
+const connectionReader = (read, now = Date.now) => {
+  const cache = /* @__PURE__ */ new Map();
+  return async (account) => {
+    const cached = cache.get(account);
+    if (cached !== void 0 && now() - cached.at < CONNECTION_TTL_MS) {
+      return cached.connection;
+    }
+    let read_;
+    try {
+      read_ = await read(account);
+    } catch (error) {
+      throw new NotFound(`no SaldeoSMART connection "${account}": ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const { provider, username, apiToken, baseUrl, company } = read_.config;
+    if (read_.kind !== "cli" || provider !== "saldeosmart" || username === void 0 || apiToken === void 0) {
+      throw new NotFound(`"${account}" is not a connected SaldeoSMART API card`);
+    }
+    const connection = {
+      account,
+      credentials: { username, apiToken, baseUrl: baseUrl === void 0 || baseUrl === "" ? DEFAULT_BASE_URL : baseUrl },
+      ...company === void 0 || company === "" ? {} : { company },
+      scopes: scopesOf(read_.config)
+    };
+    cache.set(account, { at: now(), connection });
+    return connection;
+  };
+};
+const resolvePrompt = (session, unresolved) => [
+  `Reconciliation session ${session.id} for the SaldeoSMART connection "${session.account}" (company ${session.company}) has ${unresolved} bank transaction${unresolved === 1 ? "" : "s"} without a confident match to an open invoice.`,
+  `Work through them with the saldeo tools: \`saldeo_session\` (account "${session.account}", session "${session.id}") lists the unresolved transactions, the candidates the matcher found and the pool of open invoices; \`saldeo_invoices\` and \`saldeo_documents\` reach further back or look a number or NIP up; \`saldeo_propose\` records which invoice(s) a transaction pays, with your reasons; \`saldeo_skip\` records that a transaction is not an invoice payment at all (a fee, tax, an internal transfer).`,
+  `Propose only what the evidence supports: an invoice number in the title, the contractor's NIP or account, an amount that equals what is owed or a sum of several invoices of one contractor. Say in each proposal what convinced you. Leave a transaction alone rather than guess.`,
+  `You never confirm and never mark anything paid: the owner confirms each proposal in the Saldeo view, and marking happens in a separate step they start. When every unresolved transaction has a proposal or a skip, stop and summarise what you proposed and what you could not resolve.`
+].join("\n\n");
+const markPrompt = (session, browserAccount, items) => {
+  const lines = items.map(
+    ({ item, transaction, invoices }) => [
+      `- transaction ${transaction.id} (${transaction.date}, ${formatAmount(transaction.amount, transaction.currency)}, "${transaction.title}"${transaction.counterparty === void 0 ? "" : `, from ${transaction.counterparty}`}) settles:`,
+      ...invoices.map(
+        ({ allocation, invoice }) => `    - ${invoice?.kind ?? "invoice"} ${invoice?.number ?? allocation.invoiceId} (Saldeo id ${invoice?.saldeoId ?? "?"}, ${invoice?.source === "document" ? "document archive" : "invoice issued in Saldeo"}), amount ${formatAmount(allocation.amount, transaction.currency)}${item.marking?.status === "failed" ? " — a previous attempt failed: " + (item.marking.note ?? "no note") : ""}`
+      )
+    ].join("\n")
+  );
+  return [
+    `The owner confirmed ${items.length} settlement${items.length === 1 ? "" : "s"} in reconciliation session ${session.id} (SaldeoSMART connection "${session.account}", company ${session.company}). Mark them as paid in SaldeoSMART through the connected browser account "${browserAccount}"; its skill explains where in the web app that happens.`,
+    lines.join("\n"),
+    `For each transaction, once SaldeoSMART shows the invoice as paid (or the transaction linked), call \`saldeo_record_marking\` with account "${session.account}", session "${session.id}", the transaction id and status "ok"; if you cannot do it, record "failed" with a note saying what stopped you, and move on. Use the transaction's date as the payment date. Touch nothing else in SaldeoSMART: no other invoice, no edits beyond the payment. When done, summarise what was marked and what was not.`
+  ].join("\n\n");
+};
+const activateServer = (api, _context, options = {}) => {
+  const connection = connectionReader((id) => api.daemon.json(`/capabilities/${encodeURIComponent(id)}/connection`));
+  const service = createService({ workspaceRoot: api.workspaceRoot, connection, ...options.clientOptions === void 0 ? {} : { clientOptions: options.clientOptions } });
+  const browserAccountOf = async (id) => {
+    const read = await api.daemon.json(`/capabilities/${encodeURIComponent(id)}/connection`).catch(() => void 0);
+    if (read === void 0 || read.kind !== "browser" || read.config["platform"] !== "saldeosmart-web") {
+      throw new BadRequest(`"${id}" is not a connected SaldeoSMART (web) browser account`);
+    }
+    return id;
+  };
+  const startAgent = async (prompt, title, conversationId, pick) => {
+    await api.daemon.json(`/agent`, {
+      method: "POST",
+      body: JSON.stringify({
+        prompt,
+        conversationId,
+        isolated: true,
+        unattended: true,
+        runRole: RUN_ROLE,
+        ...pick ?? {},
+        title: title.slice(0, TITLE_MAX)
+      })
+    });
+    return { conversationId };
+  };
+  const handle = async (request) => {
+    const url = new URL(request.url);
+    const parts = url.pathname.split("/").filter((part) => part !== "");
+    if (parts[0] !== "accounts" || parts[1] === void 0) {
+      return void 0;
+    }
+    const account = decodeURIComponent(parts[1]);
+    const rest = parts.slice(2).map(decodeURIComponent);
+    const body = async () => await request.json();
+    const company = url.searchParams.get("company") ?? "";
+    if (rest.length === 1 && request.method === "GET") {
+      switch (rest[0]) {
+        case "status":
+          return json(await service.status(account));
+        case "companies":
+          return json({ companies: await service.companies(account) });
+        case "invoices": {
+          const months = Number.parseInt(url.searchParams.get("months") ?? "", 10);
+          const invoices = await service.payables(account, company, { ...Number.isInteger(months) && months > 0 ? { months } : {}, open: url.searchParams.get("open") !== "0" });
+          return json({ invoices, fetchedAt: (/* @__PURE__ */ new Date()).toISOString() });
+        }
+        case "statements":
+          return json({ statements: await service.statements(account, company) });
+        case "sessions":
+          return json({ sessions: await service.sessions(account) });
+        case "ledger":
+          return json({ ledger: await service.ledger(account) });
+        default:
+          return void 0;
+      }
+    }
+    if (rest[0] === "sessions" && rest.length === 1 && request.method === "POST") {
+      const input = await body();
+      if (typeof input.content !== "string" || typeof input.name !== "string" || typeof input.company !== "string") {
+        throw new BadRequest("import needs company, name and base64 content");
+      }
+      const session = await service.importFile(account, input.company, input.name, new Uint8Array(Buffer.from(input.content, "base64")));
+      return json({ session }, 201);
+    }
+    if (rest[0] !== "sessions" || rest[1] === void 0) {
+      return void 0;
+    }
+    const id = rest[1];
+    const action = rest[2];
+    if (action === void 0) {
+      if (request.method === "GET") {
+        return json({ session: await service.session(account, id) });
+      }
+      if (request.method === "DELETE") {
+        await service.deleteSession(account, id);
+        return json({ ok: true });
+      }
+      return void 0;
+    }
+    if (request.method !== "PUT" && request.method !== "POST") {
+      return void 0;
+    }
+    switch (action) {
+      case "mapping": {
+        const input = await body();
+        const { session, skipped } = await service.applyMapping(account, id, input.mapping, input.lookbackMonths);
+        return json({ session, skipped });
+      }
+      case "rematch":
+        return json({ session: await service.rematch(account, id) });
+      case "decide": {
+        const input = await body();
+        return json({ session: await service.decide(account, id, input) });
+      }
+      case "decide-all": {
+        const input = await body();
+        if (input.verdict !== "confident") {
+          throw new BadRequest(`decide-all only confirms "confident" items`);
+        }
+        return json({ session: await service.confirmAll(account, id) });
+      }
+      case "ask-agent": {
+        const input = await body();
+        const session = await service.session(account, id);
+        const unresolved = session.items.filter((item) => item.decision === void 0 && item.verdict !== "confident" && item.verdict !== "ignored");
+        if (unresolved.length === 0) {
+          throw new BadRequest("nothing is unresolved in this session");
+        }
+        const conversationId = mintConversationId("resolve", session.id, Date.now());
+        await startAgent(resolvePrompt(session, unresolved.length), `Saldeo: resolve ${unresolved.length} payments (${session.file.name})`, conversationId, input.pick);
+        await recordRun(account, id, conversationId, "resolve");
+        return json({ conversationId, items: unresolved.length });
+      }
+      case "mark": {
+        const input = await body();
+        const browserAccount = await browserAccountOf(input.browserAccount);
+        const session = await service.session(account, id);
+        const wanted = input.transactionIds === void 0 ? void 0 : new Set(input.transactionIds);
+        const items = service.unmarked(session).filter((entry) => wanted === void 0 || wanted.has(entry.item.transactionId));
+        if (items.length === 0) {
+          throw new BadRequest("nothing confirmed is waiting to be marked");
+        }
+        const conversationId = mintConversationId("mark", session.id, Date.now());
+        await startAgent(markPrompt(session, browserAccount, items), `Saldeo: mark ${items.length} paid (${session.file.name})`, conversationId, input.pick);
+        for (const entry of items) {
+          await service.recordMarking(account, id, { transactionId: entry.item.transactionId, status: "pending", conversationId });
+        }
+        await recordRun(account, id, conversationId, "mark");
+        return json({ conversationId, items: items.length });
+      }
+      case "record-marking": {
+        const input = await body();
+        return json({ session: await service.recordMarking(account, id, input) });
+      }
+      case "verify":
+        return json({ session: await service.verify(account, id) });
+      default:
+        return void 0;
+    }
+  };
+  const recordRun = async (account, id, conversationId, kind) => {
+    await updateSession(api.workspaceRoot, account, id, (current) => ({
+      ...current,
+      agentRuns: [...current.agentRuns, { conversationId, kind, startedAt: (/* @__PURE__ */ new Date()).toISOString() }]
+    }));
+  };
+  api.routes.mount(async (request) => {
+    try {
+      return await handle(request);
+    } catch (error) {
+      const status = statusOf(error);
+      if (status === 500) {
+        api.log(`unexpected: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+      }
+      return json({ error: error instanceof Error ? error.message : String(error) }, status);
+    }
+  });
+};
+export {
+  activateServer,
+  connectionReader,
+  markPrompt,
+  resolvePrompt
+};

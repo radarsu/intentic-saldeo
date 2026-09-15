@@ -1,0 +1,10 @@
+# A standalone extension is NOT a pnpm workspace, and this file is not here to make it one. It exists for a
+# single reason: pnpm 11 refuses to run a dependency's install script until that dependency is approved BY NAME,
+# and the ones below have install scripts the build genuinely needs.
+#
+#   esbuild   — vite's bundler. Its postinstall puts the platform binary in place; without it `pnpm build` dies
+#               on a missing binary, which reads like a broken repo rather than an unapproved script.
+#   vue-demi  — the Vue 2/3 shim under @tanstack/vue-query. Its postinstall picks which Vue it targets.
+allowBuilds:
+  esbuild: true
+  vue-demi: true

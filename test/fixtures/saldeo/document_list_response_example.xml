@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?><RESPONSE>
+    <METAINF>
+        <PRODUCER>SALDEO</PRODUCER>
+        <TIMESTAMP>2022-03-23 09:47:50.203</TIMESTAMP>
+        <OPERATION>document.list</OPERATION>
+        <VERSION>3.1</VERSION>
+        <PARAMETERS>
+            <PARAMETER>
+                <NAME>req_id</NAME>
+                <VALUE>20220323094717</VALUE>
+            </PARAMETER>
+            <PARAMETER>
+                <NAME>company_program_id</NAME>
+                <VALUE>ex.id1</VALUE>
+            </PARAMETER>
+            <PARAMETER>
+                <NAME>username</NAME>
+                <VALUE>bk</VALUE>
+            </PARAMETER>
+            <PARAMETER>
+                <NAME>policy</NAME>
+                <VALUE>SALDEO</VALUE>
+            </PARAMETER>
+        </PARAMETERS>
+    </METAINF>
+    <STATUS>OK</STATUS>
+    <CONTRACTORS>
+        <CONTRACTOR>
+            <CONTRACTOR_ID>16</CONTRACTOR_ID>
+            <SHORT_NAME>BORACLE</SHORT_NAME>
+            <FULL_NAME>BORACLE POLSKA Sp. z o.o.</FULL_NAME>
+            <SUPPLIER>false</SUPPLIER>
+            <CUSTOMER>true</CUSTOMER>
+            <VAT_NUMBER>5270201490</VAT_NUMBER>
+            <CITY>Warszawa</CITY>
+            <POSTCODE>01-208</POSTCODE>
+            <STREET>Ul. Przyokopowa 31</STREET>
+            <COUNTRY_ISO3166A2>PL</COUNTRY_ISO3166A2>
+            <TELEPHONE>+123 345 567 77</TELEPHONE>
+            <CONTACT_PERSON>Jon Baracle</CONTACT_PERSON>
+            <DESCRIPTION>Boracle jest światowym liderem w boraclowaniu</DESCRIPTION>
+            <PAYMENT_DAYS>100</PAYMENT_DAYS>
+            <BANK_ACCOUNTS>
+                <BANK_ACCOUNT>
+                    <NUMBER>GB11616708745332741277</NUMBER>
+                </BANK_ACCOUNT>
+            </BANK_ACCOUNTS>
+            <EMAILS>
+                <EMAIL>jon@boracle.boracle</EMAIL>
+            </EMAILS>
+            <INACTIVE>false</INACTIVE>
+        </CONTRACTOR>
+    </CONTRACTORS>
+    <DOCUMENTS>
+        <DOCUMENT>
+            <DOCUMENT_ID>65</DOCUMENT_ID>
+            <NUMBER>FV/101/2016</NUMBER>
+            <ISSUE_DATE>2015-11-06</ISSUE_DATE>
+            <SALE_DATE>2015-11-06</SALE_DATE>
+            <PAYMENT_DATE>2015-11-06</PAYMENT_DATE>
+            <RECEIVE_DATE>2015-11-06</RECEIVE_DATE>
+            <DOCUMENT_TYPE>
+                <ID>56</ID>
+                <NAME>Faktura kosztowa</NAME>
+                <SHORT_NAME>FK</SHORT_NAME>
+                <TYPE>INVOICE_COST</TYPE>
+            </DOCUMENT_TYPE>
+            <CLASSIFICATION>INVOICE</CLASSIFICATION>
+            <CONTRACTOR>
+                <CONTRACTOR_ID>16</CONTRACTOR_ID>
+            </CONTRACTOR>
+            <CATEGORY>materiały biurowe</CATEGORY>
+            <REGISTRY>rejestr 1</REGISTRY>
+            <FOLDER>
+                <MONTH>11</MONTH>
+                <YEAR>2015</YEAR>
+            </FOLDER>
+            <SUM>492.00</SUM>
+            <VAT_REGISTRIES>
+                <VAT_REGISTRY>
+                    <RATE>23</RATE>
+                    <NETTO>400.00</NETTO>
+                    <VAT>92.00</VAT>
+                </VAT_REGISTRY>
+            </VAT_REGISTRIES>
+            <CURRENCY_ISO4217>PLN</CURRENCY_ISO4217>
+            <PAYMENT_TYPE>CASH</PAYMENT_TYPE>
+            <STAGE>Zatwierdzony</STAGE>
+            <EXPORTED>2022-03-22 15:38:28.743</EXPORTED>
+            <SOURCE>https://docs-saldeo.brainshare.pl/docs_0/sb1/1/201511/a0370d1a3cca9b21c2d8c327e5915b65/proans-import-contractors_2.csv</SOURCE>
+            <SEND_BY_USER>bk</SEND_BY_USER>
+            <IS_DOCUMENT_PAID>false</IS_DOCUMENT_PAID>
+            <IS_DOCUMENT_BELONG_TO_COMPANY>true</IS_DOCUMENT_BELONG_TO_COMPANY>
+            <KSEF>
+                <NUMBER>ad80924-234jajf-222</NUMBER>
+                <NUMBER_CREATE_DATE>2021-11-16 00:00:00.000</NUMBER_CREATE_DATE>
+                <RECEIVED_BY_USER_ID>1</RECEIVED_BY_USER_ID>
+                <RECEIVED_DATE>2021-11-16 00:00:00.000</RECEIVED_DATE>
+                <PREVIEW_SOURCE>https://docs-saldeo.brainshare.pl/docs_0/link_do_pliku.html</PREVIEW_SOURCE>
+            </KSEF>
+            <ADDED_BY_USER_ID>21</ADDED_BY_USER_ID>
+            <ADDED_BY_USER>bk</ADDED_BY_USER>
+            <CREATE_SOURCE>UPLOAD</CREATE_SOURCE>
+        </DOCUMENT>
+    </DOCUMENTS>
+</RESPONSE>

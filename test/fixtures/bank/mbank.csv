@@ -1,0 +1,31 @@
+mBank S.A. Bankowoœæ Detaliczna;
+Skrytka Pocztowa 2108;
+90-959 £ódŸ 2;
+www.mBank.pl;
+mLinia: 801 300 800;
++48 (42) 6 300 800;
+
+
+#Klient;
+JAN KOWALSKI;
+
+Lista operacji;
+
+#Za okres:;
+01.08.2026;31.08.2026;
+
+#zgodnie z wybranymi kryteriami wyszukiwania;
+
+#Rachunek;
+mBiznes konto;
+
+#Waluta;
+PLN;
+
+#Data operacji;#Opis operacji;#Rachunek;#Kategoria;#Kwota;#Saldo po operacji;
+2026-08-03;"PRZELEW PRZYCHODZ¥CY   ACME SP. Z O.O.   FV/12/2026 zap³ata";"mBiznes konto";"Wp³ywy";"1 230,00";"12 345,67";
+2026-08-05;"PRZELEW WYCHODZ¥CY   BORACLE POLSKA SP Z OO   FV/101/2016";"mBiznes konto";"Wydatki";"-492,00";"11 853,67";
+2026-08-07;"OP£ATA ZA PROWADZENIE RACHUNKU";"mBiznes konto";"Op³aty";"-25,00";"11 828,67";
+
+#Saldo koñcowe;
+11 828,67;

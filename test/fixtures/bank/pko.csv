@@ -1,0 +1,4 @@
+﻿"Data operacji","Data waluty","Typ transakcji","Kwota","Waluta","Saldo po transakcji","Opis transakcji","","","",""
+"2026-08-03","2026-08-03","Przelew na rachunek","+1230.00","PLN","+5230.00","Rachunek nadawcy: 61 1090 1014 0000 0712 1981 2874","Nazwa nadawcy: ACME SP. Z O.O.","Adres nadawcy: UL. PROSTA 1 00-001 WARSZAWA","Tytuł: FV/12/2026 zapłata",""
+"2026-08-05","2026-08-05","Przelew z rachunku","-492.00","PLN","+4738.00","Rachunek odbiorcy: 11 6167 0874 5332 7412 7700 0000","Nazwa odbiorcy: BORACLE POLSKA SP Z OO","Adres odbiorcy: UL. PRZYOKOPOWA 31","Tytuł: FV/101/2016",""
+"2026-08-08","2026-08-08","Prowizja","-9.90","PLN","+4728.10","Opłata za przelew","","","",""

@@ -1,0 +1,8 @@
+Lista transakcji;;;;
+;;;;
+Rachunek: 12 1050 1234 1000 0090 1234 5678;;;;
+Wybrany okres: 2026-08-01 - 2026-08-31;;;;
+;;;;
+"Data transakcji";"Data ksiêgowania";"Dane kontrahenta";"Tytu³";"Nr rachunku";"Nazwa banku";"Szczegó³y";"Nr transakcji";"Kwota transakcji (waluta rachunku)";"Waluta";"Kwota blokady/zwolnienie blokady";"Waluta";"Kwota p³atnoœci w walucie";"Waluta";"Konto";"Saldo po transakcji";"Waluta";;;;
+2026-08-03;2026-08-03;"ACME SP. Z O.O.";"FV/12/2026 zap³ata";"'61109010140000071219812874'";"Santander Bank";"";"202608030001";1230,00;PLN;;;;;"Konto Firmowe";5230,00;PLN;;;;
+2026-08-05;2026-08-05;"BORACLE POLSKA SP Z OO";"FV/101/2016";"'11616708745332741277000000'";"";"";"202608050002";-492,00;PLN;;;;;"Konto Firmowe";4738,00;PLN;;;;

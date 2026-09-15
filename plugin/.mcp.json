@@ -1,0 +1,8 @@
+{
+    "mcpServers": {
+        "saldeo": {
+            "command": "${CLAUDE_PLUGIN_ROOT}/../dist/bin/saldeo-mcp",
+            "args": []
+        }
+    }
+}

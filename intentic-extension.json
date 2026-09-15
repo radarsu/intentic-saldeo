@@ -1,0 +1,130 @@
+{
+    "$schema": "https://intentic.dev/intentic-extension.schema.json",
+    "publisher": "intentic",
+    "name": "saldeo",
+    "version": "1.0.0",
+    "category": "connections",
+    "art": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 32 32\"><rect width=\"32\" height=\"32\" fill=\"#1F6F5F\"/><path d=\"M6.5 4.5h12.4l5.6 5.6v17.4H6.5z\" fill=\"#fff\"/><path d=\"M18.9 4.5l5.6 5.6h-5.6z\" fill=\"#B9E4D6\"/><rect x=\"9.4\" y=\"13.2\" width=\"9.2\" height=\"2\" rx=\"1\" fill=\"#1F6F5F\"/><rect x=\"9.4\" y=\"17.2\" width=\"7\" height=\"2\" rx=\"1\" fill=\"#1F6F5F\"/><circle cx=\"22.5\" cy=\"22.5\" r=\"6\" fill=\"#FFC24D\"/><path d=\"M19.6 22.6l2 2 3.6-3.9\" fill=\"none\" stroke=\"#1F6F5F\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>",
+    "icon": "credit-card",
+    "engines": {
+        "intentic": "^2.1.0"
+    },
+    "entry": "dist/extension.js",
+    "server": "dist/server.js",
+    "permissions": {
+        "daemon": ["GET /capabilities/*/connection", "POST /agent"]
+    },
+    "contributes": {
+        "views": [
+            {
+                "id": "saldeo",
+                "label": "Saldeo",
+                "surface": "rail",
+                "badge": true
+            }
+        ],
+        "files": [
+            {
+                "path": ".intentic/records/saldeo/",
+                "invalidates": ["saldeo"]
+            }
+        ],
+        "bin": "dist/bin",
+        "agent": {
+            "path": "plugin"
+        },
+        "capabilities": [
+            {
+                "id": "saldeosmart",
+                "kind": "cli",
+                "catalog": {
+                    "name": "SaldeoSMART",
+                    "icon": "credit-card",
+                    "description": "Your invoices, documents and bank statements from SaldeoSMART, as agent tools.",
+                    "category": "business",
+                    "hint": "The API reads: companies, contractors, invoices issued in Saldeo, archive documents, bank statements and what Saldeo already settled. It cannot mark anything paid; connect the SaldeoSMART (web) account for that. The switches below are what the agent may read and whether it may propose matches in the Saldeo view's reconciliation sessions.",
+                    "guide": {
+                        "url": "https://saldeo.brainshare.pl/app/uruchamianie.html",
+                        "linkLabel": "Open SaldeoSMART",
+                        "steps": [
+                            "Sign in as an office-side user (the API is not offered to a client-side login).",
+                            "Konfiguracja → Konto → Ustawienia API → generate or copy the token.",
+                            "Paste the login and the token here. The token is stored, never shown again."
+                        ]
+                    }
+                },
+                "fields": [
+                    { "key": "username", "label": "Login", "placeholder": "the SaldeoSMART user name" },
+                    { "key": "apiToken", "label": "API token", "secret": true },
+                    {
+                        "key": "company",
+                        "label": "Company program id",
+                        "optional": true,
+                        "placeholder": "leave empty to pick a company in the view",
+                        "hint": "Pins one company (its `company_program_id`). Empty lets the view and the agent choose among the companies the login can see."
+                    },
+                    {
+                        "key": "baseUrl",
+                        "label": "API base URL",
+                        "default": "https://saldeo.brainshare.pl",
+                        "advanced": true,
+                        "hint": "Only the test server differs."
+                    },
+                    {
+                        "key": "documents",
+                        "label": "Read the document archive",
+                        "boolean": true,
+                        "default": "on",
+                        "hint": "Cost and sales documents, with their paid state."
+                    },
+                    {
+                        "key": "invoices",
+                        "label": "Read invoices issued in SaldeoSMART",
+                        "boolean": true,
+                        "default": "on"
+                    },
+                    {
+                        "key": "bankStatements",
+                        "label": "Read bank statements",
+                        "boolean": true,
+                        "default": "on",
+                        "hint": "Statements Saldeo holds, and which documents it settled them against."
+                    },
+                    {
+                        "key": "propose",
+                        "label": "Let the agent propose matches",
+                        "boolean": true,
+                        "default": "on",
+                        "hint": "Proposals land in a reconciliation session for you to confirm. Off = read-only tools."
+                    }
+                ],
+                "env": {
+                    "SALDEO_USERNAME": "${username}",
+                    "SALDEO_API_TOKEN": "${apiToken}",
+                    "SALDEO_URL": "${baseUrl}",
+                    "SALDEO_COMPANY": "${company}",
+                    "SALDEO_SCOPE_DOCUMENTS": "${documents}",
+                    "SALDEO_SCOPE_INVOICES": "${invoices}",
+                    "SALDEO_SCOPE_BANK": "${bankStatements}",
+                    "SALDEO_SCOPE_PROPOSE": "${propose}"
+                },
+                "skill": "skills/saldeosmart/SKILL.md"
+            },
+            {
+                "id": "saldeosmart-web",
+                "kind": "browser",
+                "catalog": {
+                    "name": "SaldeoSMART (web)",
+                    "icon": "check-square",
+                    "description": "Mark invoices paid and link transactions in Saldeo, as you.",
+                    "category": "business",
+                    "hint": "The API has no write for payments, so this signed-in browser profile is how confirmed settlements reach SaldeoSMART: the agent opens the invoice or the bank transaction and does what you would. Connect it only if the agent should be able to mark things paid."
+                },
+                "fields": [],
+                "loginUrl": "https://saldeo.brainshare.pl/app/uruchamianie.html",
+                "homeUrl": "https://saldeo.brainshare.pl/app/uruchamianie.html",
+                "skill": "skills/saldeosmart-web/SKILL.md"
+            }
+        ]
+    }
+}
