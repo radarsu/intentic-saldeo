@@ -28,15 +28,13 @@ test(`every path the manifest promises exists, and the shipped tools are executa
     }
 });
 
-test(`the MCP tools come from the backend, not from a process the plugin spawns per session`, async () => {
-    const plugin = manifest.contributes.agent.path;
-    await access(here(`${plugin}/.claude-plugin/plugin.json`), constants.R_OK);
-    await access(here(`${plugin}/skills/saldeo-reconcile/SKILL.md`), constants.R_OK);
-    // A stdio server here would be spawned again by every session; the daemon mounts the backend's `mcp` route instead.
-    await assert.rejects(access(here(`${plugin}/.mcp.json`)));
+test(`the tools come from the backend per API card, for every runtime, and no Claude-only plugin ships anything`, () => {
     const [api] = manifest.contributes.capabilities;
-    assert.equal(api.mcp, `mcp`);
-    assert.ok(manifest.server, `the endpoint is served by the backend`);
+    assert.deepEqual(manifest.contributes.tools, { perCard: api.id });
+    assert.equal(api.mcp, undefined, `the alias would be a second way to the same tools`);
+    assert.ok(manifest.server, `api.tools.serve is the backend's`);
+    assert.equal(manifest.contributes.agent, undefined, `a skill in a plugin reaches Claude Code alone`);
+    assert.match(manifest.engines.intentic, /^\^2\.20\./u, `contributes.tools needs a 2.20 host`);
 });
 
 test(`the two cards: an API card with the permission switches, and a browser card for the writes the API lacks`, () => {
@@ -75,7 +73,7 @@ test(`the skills say what they must`, async () => {
     assert.match(web, /\$\{accounts\}/u);
     assert.match(web, /\$\{tools\}/u);
     assert.match(web, /saldeo_record_marking/u);
-    const reconcile = await readFile(here(`plugin/skills/saldeo-reconcile/SKILL.md`), `utf8`);
-    assert.match(reconcile, /^---\nname: saldeo-reconcile\n/u);
-    assert.match(reconcile, /You propose; the owner decides/u);
+    // Reconciling lives in the card's own skill, which every runtime reads, not in a Claude Code plugin.
+    assert.match(api, /## Reconciling bank payments/u);
+    assert.match(api, /You propose; the owner decides/u);
 });

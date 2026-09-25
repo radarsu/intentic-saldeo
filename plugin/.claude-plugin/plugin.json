@@ -1,8 +1,0 @@
-{
-    "name": "saldeo",
-    "description": "SaldeoSMART for the agent: read a company's open invoices, cost documents, contractors and bank statements over the API, and take part in reconciling a bank statement against them, proposing which invoice a payment settles for the owner to confirm. Ships the saldeo-reconcile skill; the saldeo MCP tools are served by the extension's backend and mounted by the daemon into each turn granted a SaldeoSMART card, and the `saldeo` CLI arrives on PATH from the same extension.",
-    "version": "1.0.0",
-    "author": { "name": "intentic" },
-    "homepage": "https://github.com/radarsu/intentic-saldeo",
-    "repository": "https://github.com/radarsu/intentic-saldeo"
-}

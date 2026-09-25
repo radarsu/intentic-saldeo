@@ -5,8 +5,9 @@ import { join } from "node:path";
 import { after, before, test } from "node:test";
 import type { ExtensionServerApi } from "@intentic/extension-api";
 import type { Session } from "../src/core/contract.ts";
-import { activateServer, connectionReader } from "../src/server/server.ts";
+import { activateServer, connectionOf, connectionReader } from "../src/server/server.ts";
 import { NotFound } from "../src/core/service.ts";
+import type { ToolsApi } from "../src/server/tools-api.ts";
 import { fakeFetch, type FakeState } from "./helpers/fake-saldeo.ts";
 
 /* The whole backend against a fake SaldeoSMART and a fake daemon: import → mapping → match → decide → agent → mark → verify. */
@@ -35,7 +36,7 @@ before(async () => {
         "saldeosmart-web": { id: "saldeosmart-web", kind: "browser", config: { platform: "saldeosmart-web" } },
         reddit: { id: "reddit", kind: "browser", config: { platform: "reddit" } },
     };
-    const api: ExtensionServerApi = {
+    const api: ExtensionServerApi & { tools: ToolsApi } = {
         apiVersion: "2.14.0",
         workspaceRoot: root,
         extensionDir: root,
@@ -45,6 +46,7 @@ before(async () => {
                 handler = mounted;
             },
         },
+        tools: { serve: () => {} },
         daemon: {
             request: () => Promise.reject(new Error("unused")),
             json: async <T>(path: string, init?: RequestInit): Promise<T> => {
@@ -244,25 +246,23 @@ test("statements and invoices routes answer from Saldeo; delete removes the sess
     assert.deepEqual(logs, []);
 });
 
-test("connectionReader caches for a minute and refuses a card that is not SaldeoSMART", async () => {
+test("connectionReader reads the card every time, and a tool call uses the card it was handed", async () => {
     let reads = 0;
-    let clock = 0;
-    const reader = connectionReader(
-        async (id) => {
-            reads += 1;
-            return id === "other"
-                ? { id, kind: "cli", config: { provider: "github", token: "x" } }
-                : { id, kind: "cli", config: { provider: "saldeosmart", username: "u", apiToken: "t", documents: "off" } };
-        },
-        () => clock,
-    );
-    const first = await reader("saldeosmart");
+    const reader = connectionReader(async (id) => {
+        reads += 1;
+        return id === "other"
+            ? { id, kind: "cli", config: { provider: "github", token: "x" } }
+            : { id, kind: "cli", config: { provider: "saldeosmart", username: "u", apiToken: "t", documents: "off" } };
+    });
+    const first = await reader.connection("saldeosmart");
     assert.equal(first.credentials.baseUrl, "https://saldeo.brainshare.pl");
     assert.equal(first.scopes.documents, false);
-    await reader("saldeosmart");
-    assert.equal(reads, 1);
-    clock = 61_000;
-    await reader("saldeosmart");
+    await reader.connection("saldeosmart");
+    // No copy is kept: a switch the owner flips binds on the very next request.
     assert.equal(reads, 2);
-    await assert.rejects(reader("other"), NotFound);
+    await assert.rejects(reader.connection("other"), NotFound);
+    const handed = connectionOf("saldeosmart", "cli", { provider: "saldeosmart", username: "u", apiToken: "t", documents: "on" });
+    const before = reads;
+    assert.equal((await reader.handing(handed, () => reader.connection("saldeosmart"))).scopes.documents, true);
+    assert.equal(reads, before, "the handed card is used as handed, with no read back");
 });

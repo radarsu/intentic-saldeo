@@ -12,7 +12,7 @@ import type {
     SessionSummary,
 } from "./contract.ts";
 
-// The backend's HTTP surface under /x/intentic.saldeo, as both halves spell it. Paths are relative to the namespace;
+// The backend's HTTP surface in its own namespace (`api.backend` on the view side), as both halves spell it. Paths are relative to the namespace;
 // every body and answer is JSON. `account` is the SaldeoSMART capability's id.
 
 export const ROUTES = {

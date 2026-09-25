@@ -7,7 +7,7 @@
     "art": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 32 32\"><rect width=\"32\" height=\"32\" fill=\"#1F6F5F\"/><path d=\"M6.5 4.5h12.4l5.6 5.6v17.4H6.5z\" fill=\"#fff\"/><path d=\"M18.9 4.5l5.6 5.6h-5.6z\" fill=\"#B9E4D6\"/><rect x=\"9.4\" y=\"13.2\" width=\"9.2\" height=\"2\" rx=\"1\" fill=\"#1F6F5F\"/><rect x=\"9.4\" y=\"17.2\" width=\"7\" height=\"2\" rx=\"1\" fill=\"#1F6F5F\"/><circle cx=\"22.5\" cy=\"22.5\" r=\"6\" fill=\"#FFC24D\"/><path d=\"M19.6 22.6l2 2 3.6-3.9\" fill=\"none\" stroke=\"#1F6F5F\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>",
     "icon": "credit-card",
     "engines": {
-        "intentic": "^2.1.0"
+        "intentic": "^2.20.0"
     },
     "entry": "dist/extension.js",
     "server": "dist/server.js",
@@ -30,14 +30,13 @@
             }
         ],
         "bin": "dist/bin",
-        "agent": {
-            "path": "plugin"
+        "tools": {
+            "perCard": "saldeosmart"
         },
         "capabilities": [
             {
                 "id": "saldeosmart",
                 "kind": "cli",
-                "mcp": "mcp",
                 "catalog": {
                     "name": "SaldeoSMART",
                     "icon": "credit-card",

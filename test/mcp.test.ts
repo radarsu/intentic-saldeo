@@ -4,20 +4,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import type { ExtensionServerApi } from "@intentic/extension-api";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Session } from "../src/core/contract.ts";
 import { createService } from "../src/core/service.ts";
 import { activateServer } from "../src/server/server.ts";
+import type { ToolCard, ToolDefinition, ToolResult, ToolsApi } from "../src/server/tools-api.ts";
 import { fakeFetch, type FakeState } from "./helpers/fake-saldeo.ts";
 
-/* The MCP tools as the daemon reaches them: Streamable HTTP into the backend's `mcp/<card>` route, the card read
-   through a fake daemon, against a fake SaldeoSMART. */
+/* The agent's tools as the host reaches them: what `api.tools.serve` answers for the card the daemon handed, called the
+   way the host calls them, against a fake SaldeoSMART. The host's own MCP transport is the daemon's to test. */
 
 const BASE = "https://saldeo.test";
 
 let root = "";
-let handler: (request: Request) => Promise<Response | undefined>;
+let served: Parameters<ToolsApi["serve"]>[0];
 const state: FakeState = { paid65: false, calls: [] };
 
 const card = (id: string, switches: Record<string, string> = {}) => ({
@@ -28,30 +27,21 @@ const card = (id: string, switches: Record<string, string> = {}) => ({
 
 before(async () => {
     root = await mkdtemp(join(tmpdir(), "saldeo-mcp-"));
-    const connections: Record<string, unknown> = {
-        saldeosmart: card("saldeosmart"),
-        narrow: card("narrow", { propose: "off", bankStatements: "off" }),
-    };
-    const api: ExtensionServerApi = {
+    const api: ExtensionServerApi & { tools: ToolsApi } = {
         apiVersion: "2.14.0",
         workspaceRoot: root,
         extensionDir: root,
         log: () => {},
-        routes: {
-            mount: (mounted) => {
-                handler = mounted;
+        routes: { mount: () => {} },
+        tools: {
+            serve: (tools) => {
+                served = tools;
             },
         },
+        // The tools never read the card back: the host hands it with every call.
         daemon: {
             request: () => Promise.reject(new Error("unused")),
-            json: async <T>(path: string): Promise<T> => {
-                const id = /^\/capabilities\/([^/]+)\/connection$/.exec(path)?.[1];
-                const connection = id === undefined ? undefined : connections[decodeURIComponent(id)];
-                if (connection === undefined) {
-                    throw new Error(`daemon answered 404 for GET ${path}`);
-                }
-                return connection as T;
-            },
+            json: () => Promise.reject(new Error("the tools read the card the host handed, never the daemon")),
         },
     };
     activateServer(api, { extensionId: "intentic.saldeo" }, { clientOptions: { fetch: fakeFetch(state), perMinute: 10_000 } });
@@ -60,31 +50,29 @@ after(async () => {
     await rm(root, { recursive: true, force: true });
 });
 
-// Straight into the mounted handler, the way the backend host hands it a request the daemon forwarded.
-const inProcess: typeof fetch = async (input, init) => (await handler(new Request(input, init))) ?? new Response("not found", { status: 404 });
+// What the host would list for a card, and a call as the host would make it.
+const toolsFor = async (id: string, switches: Record<string, string> = {}): Promise<readonly ToolDefinition[]> =>
+    served({ id, config: card(id, switches).config } satisfies ToolCard);
 
-const connect = async (account: string): Promise<Client> => {
-    const client = new Client({ name: "test", version: "0" });
-    const transport = new StreamableHTTPClientTransport(new URL(`http://extension.internal/mcp/${account}`), { fetch: inProcess });
-    // The SDK's own classes disagree under exactOptionalPropertyTypes (`sessionId?: string` vs `string | undefined`).
-    await client.connect(transport as Parameters<Client["connect"]>[0]);
-    return client;
+const call = async (tools: readonly ToolDefinition[], name: string, args: Record<string, unknown>): Promise<ToolResult> => {
+    const tool = tools.find((entry) => entry.name === name);
+    assert.ok(tool, `no tool ${name}`);
+    return (await tool.call(args, { signal: new AbortController().signal })) as ToolResult;
 };
 
-const textOf = (result: Awaited<ReturnType<Client["callTool"]>>): string => {
-    const content = result.content as { type: string; text?: string }[];
-    return content.map((entry) => entry.text ?? "").join("");
-};
+const textOf = (result: ToolResult): string => result.content.map((entry) => (entry.type === "text" ? entry.text : "")).join("");
 
-test("a card that is not connected has no MCP endpoint", async () => {
-    await assert.rejects(connect("missing"));
+test("a card that is not a SaldeoSMART API card gets no tools", async () => {
+    await assert.rejects(async () => served({ id: "github", config: { provider: "github", token: "x" } }));
+    assert.deepEqual(await served(undefined), []);
 });
 
 test("the card's switches decide which tools exist", async () => {
-    const client = await connect("narrow");
-    const tools = (await client.listTools()).tools.map((tool) => tool.name);
+    const tools = (await toolsFor("narrow", { propose: "off", bankStatements: "off" })).map((tool) => tool.name);
     assert.deepEqual(tools, ["saldeo_status", "saldeo_companies", "saldeo_contractors", "saldeo_invoices", "saldeo_documents"]);
-    await client.close();
+    // Each is described to the model by a JSON Schema of its arguments.
+    const invoices = (await toolsFor("narrow")).find((tool) => tool.name === "saldeo_invoices");
+    assert.equal((invoices?.inputSchema as { type?: string }).type, "object");
 });
 
 test("reads reach SaldeoSMART over the URL the card holds, and proposals land in the shared session file", async () => {
@@ -100,33 +88,36 @@ test("reads reach SaldeoSMART over the URL the card holds, and proposals land in
     const { session } = await service.applyMapping("saldeosmart", imported.id, mapping);
     assert.equal(session.items[0]?.verdict, "ambiguous");
 
-    const client = await connect("saldeosmart");
-    const tools = (await client.listTools()).tools.map((tool) => tool.name);
+    const client = await toolsFor("saldeosmart");
+    const tools = client.map((tool) => tool.name);
     assert.ok(tools.includes("saldeo_propose") && tools.includes("saldeo_record_marking") && tools.includes("saldeo_bank_statements"));
 
-    const status = JSON.parse(textOf(await client.callTool({ name: "saldeo_status", arguments: {} }))) as { reachable: boolean; company: string };
+    const status = JSON.parse(textOf(await call(client, "saldeo_status", {}))) as { reachable: boolean; company: string };
     assert.equal(status.reachable, true);
     assert.equal(status.company, "abc.1");
 
-    const invoices = JSON.parse(textOf(await client.callTool({ name: "saldeo_invoices", arguments: { months: 2 } }))) as { id: string; remainingFormatted: string }[];
+    const invoices = JSON.parse(textOf(await call(client, "saldeo_invoices", { months: 2 }))) as { id: string; remainingFormatted: string }[];
     assert.deepEqual(
         invoices.map((invoice) => invoice.id).sort(),
         ["document:65", "invoice:112", "invoice:12", "invoice:13"],
     );
     assert.equal(invoices.find((invoice) => invoice.id === "document:65")?.remainingFormatted, "492,00 PLN");
 
-    const found = JSON.parse(textOf(await client.callTool({ name: "saldeo_documents", arguments: { number: "FV/101/2016" } }))) as { number: string }[];
+    const found = JSON.parse(textOf(await call(client, "saldeo_documents", { number: "FV/101/2016" }))) as { number: string }[];
     assert.deepEqual(found.map((document) => document.number), ["FV/101/2016"]);
 
-    const view = JSON.parse(textOf(await client.callTool({ name: "saldeo_session", arguments: { session: session.id } }))) as { items: { transaction: { id: string }; proposals: unknown[] }[]; pool: unknown[] };
+    const view = JSON.parse(textOf(await call(client, "saldeo_session", { session: session.id }))) as { items: { transaction: { id: string }; proposals: unknown[] }[]; pool: unknown[] };
     assert.equal(view.items.length, 1);
     assert.equal(view.items[0]?.proposals.length, 2);
     assert.equal(view.pool.length, 4);
 
     const transactionId = view.items[0]?.transaction.id ?? "";
-    const proposed = await client.callTool({
-        name: "saldeo_propose",
-        arguments: { session: session.id, transactionId, invoices: [{ invoiceId: "invoice:12", amount: 123_000 }], reasons: ["the customer's e-mail names FV/12/2026"], confidence: 90 },
+    const proposed = await call(client, "saldeo_propose", {
+        session: session.id,
+        transactionId,
+        invoices: [{ invoiceId: "invoice:12", amount: 123_000 }],
+        reasons: ["the customer's e-mail names FV/12/2026"],
+        confidence: 90,
     });
     assert.notEqual(proposed.isError, true, textOf(proposed));
     const stored = JSON.parse(await readFile(join(root, ".intentic", "records", "saldeo", "saldeosmart", "sessions", `${session.id}.json`), "utf8")) as Session;
@@ -135,12 +126,11 @@ test("reads reach SaldeoSMART over the URL the card holds, and proposals land in
     assert.equal(stored.items[0]?.decision, undefined, "a proposal is not a decision");
 
     // Recording a marking needs a confirmed item; the tool says so rather than inventing one.
-    const refused = await client.callTool({ name: "saldeo_record_marking", arguments: { session: session.id, transactionId, status: "ok" } });
+    const refused = await call(client, "saldeo_record_marking", { session: session.id, transactionId, status: "ok" });
     assert.equal(refused.isError, true);
     assert.match(textOf(refused), /not confirmed/);
 
-    const bad = await client.callTool({ name: "saldeo_propose", arguments: { session: session.id, transactionId, invoices: [{ invoiceId: "invoice:999", amount: 1 }], reasons: ["x"] } });
+    const bad = await call(client, "saldeo_propose", { session: session.id, transactionId, invoices: [{ invoiceId: "invoice:999", amount: 1 }], reasons: ["x"] });
     assert.equal(bad.isError, true);
     assert.match(textOf(bad), /not in this session's pool/);
-    await client.close();
 });

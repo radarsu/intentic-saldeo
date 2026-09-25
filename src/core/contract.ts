@@ -261,5 +261,4 @@ export interface AccountStatus {
     readonly detail?: string;
 }
 
-export const SALDEO_BASE = "/x/intentic.saldeo";
 export const DEFAULT_BASE_URL = "https://saldeo.brainshare.pl";

@@ -1,7 +1,7 @@
 import { computed as x, unref as t, defineComponent as H, ref as M, toRef as _, openBlock as o, createElementBlock as y, createVNode as b, withCtx as A, createBlock as $, createCommentVNode as S, Fragment as G, renderList as ee, createElementVNode as m, toDisplayString as k, createTextVNode as I, normalizeClass as N, watch as ye, withDirectives as ne, vModelRadio as ve, vModelText as de } from "vue";
-import { FilterBar as Se, SegmentedControl as oe, Notice as j, RowGroup as ue, timeAgo as ae, Row as re, StatusBadge as E, ui as O, CopyButton as Ae, Card as ke, Icon as q, Button as X, noticeFrom as be, Picker as Q, InfoTable as xe, DisclosureRow as he, useAgentRunPick as pe, StatStrip as Ce, AgentRunButton as fe, ConfirmDialog as Ve, Page as Ie, PageHeader as Re } from "@intentic/extension-ui";
-import { hostSlot as Pe, sandboxPoll as Me } from "@intentic/extension-api";
-import { useQuery as te, useQueryClient as Te, useMutation as De } from "@tanstack/vue-query";
+import { FilterBar as Ae, SegmentedControl as oe, Notice as j, RowGroup as ue, timeAgo as ae, Row as re, StatusBadge as E, ui as O, CopyButton as Ce, Card as ke, Icon as L, Button as X, noticeFrom as be, Picker as Q, InfoTable as xe, DisclosureRow as he, useAgentRunPick as pe, StatStrip as Ve, AgentRunButton as fe, ConfirmDialog as Ie, Page as Re, PageHeader as Pe } from "@intentic/extension-ui";
+import { hostSlot as Me, sandboxPoll as Te } from "@intentic/extension-api";
+import { useQuery as te, useQueryClient as De, useMutation as Ue } from "@tanstack/vue-query";
 const W = {
   status: (e) => `/accounts/${encodeURIComponent(e)}/status`,
   companies: (e) => `/accounts/${encodeURIComponent(e)}/companies`,
@@ -10,12 +10,12 @@ const W = {
   sessions: (e) => `/accounts/${encodeURIComponent(e)}/sessions`,
   session: (e, l) => `/accounts/${encodeURIComponent(e)}/sessions/${encodeURIComponent(l)}`,
   ledger: (e) => `/accounts/${encodeURIComponent(e)}/ledger`
-}, { bindHost: Ue, host: D } = Pe("intentic.saldeo"), Ne = "saldeosmart", ze = "saldeosmart-web", Fe = (e) => e === void 0 || e === "" || e === "on" || e === !0 || e === "true", se = (e) => e.filter((l) => l.kind === "cli" && l.config.provider === Ne).map((l) => ({
+}, { bindHost: Ne, host: D } = Me("intentic.saldeo"), $e = (e) => e.backend, ze = "saldeosmart", Fe = "saldeosmart-web", Oe = (e) => e === void 0 || e === "" || e === "on" || e === !0 || e === "true", se = (e) => e.filter((l) => l.kind === "cli" && l.config.provider === ze).map((l) => ({
   id: l.id,
   username: String(l.config.username ?? ""),
   company: typeof l.config.company == "string" && l.config.company !== "" ? String(l.config.company) : void 0,
-  propose: Fe(l.config.propose)
-})), Oe = (e) => e.filter((l) => l.kind === "browser" && l.config.platform === ze).map((l) => l.id), Le = 5 * 6e4, le = Me({
+  propose: Oe(l.config.propose)
+})), qe = (e) => e.filter((l) => l.kind === "browser" && l.config.platform === Fe).map((l) => l.id), Le = 5 * 6e4, le = Te({
   host: D,
   everyMs: Le,
   initial: () => ({ byAccount: {} }),
@@ -23,14 +23,14 @@ const W = {
     const l = {};
     for (const s of se(e.workspace.capabilities()))
       try {
-        const { sessions: u } = await e.sandbox.json(`/x/intentic.saldeo${W.sessions(s.id)}`);
+        const { sessions: u } = await $e(e).json(W.sessions(s.id));
         l[s.id] = u.reduce((c, n) => c + n.counts.awaiting, 0);
       } catch {
         l[s.id] = 0;
       }
     return { byAccount: l };
   }
-}), qe = () => {
+}), Be = () => {
   const e = le.start();
   let l;
   try {
@@ -43,9 +43,9 @@ const W = {
       e.dispose(), l?.dispose();
     }
   };
-}, Be = (e) => le.state.value.byAccount[e] ?? 0, Ee = () => le.refresh(), to = (e, l) => {
-  Ue(e), l.subscriptions.push(
-    qe(),
+}, Ee = (e) => le.state.value.byAccount[e] ?? 0, je = () => le.refresh(), to = (e, l) => {
+  Ne(e), l.subscriptions.push(
+    Be(),
     e.views.register({
       id: "saldeo",
       label: "Saldeo",
@@ -57,21 +57,21 @@ const W = {
         props: { account: c.id }
       })),
       badge: (s) => {
-        const u = typeof s.props?.account == "string" ? s.props.account : s.key, c = Be(u);
+        const u = typeof s.props?.account == "string" ? s.props.account : s.key, c = Ee(u);
         return c > 0 ? { count: c, tone: "info", tooltip: `${c} payment${c === 1 ? "" : "s"} waiting for your decision` } : void 0;
       },
       view: async () => (await Promise.resolve().then(() => Yn)).default
     })
   );
-}, $e = (e, l) => {
+}, we = (e, l) => {
   const s = e < 0 ? "-" : "", u = Math.abs(e), c = Math.floor(u / 100).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " "), n = `${s}${c},${(u % 100).toString().padStart(2, "0")}`;
   return l === void 0 ? n : `${n} ${l}`;
-}, je = {
+}, Ke = {
   confident: "confident",
   ambiguous: "needs a look",
   unmatched: "no match",
   ignored: "not an invoice"
-}, Ke = (e) => e === "confident" ? "success" : e === "ambiguous" ? "warning" : e === "unmatched" ? "danger" : "neutral", Qe = (e) => e === "confirmed" ? "success" : e === "rejected" ? "danger" : "neutral", B = (e, l) => $e(e, l), We = (e) => e.decision === void 0 ? { label: je[e.verdict], tone: Ke(e.verdict) } : e.decision.status !== "confirmed" ? { label: e.decision.status, tone: Qe(e.decision.status) } : e.verification?.paidInSaldeo === !0 ? { label: "paid in Saldeo", tone: "success" } : e.marking?.status === "ok" ? { label: "marked", tone: "success" } : e.marking?.status === "failed" ? { label: "marking failed", tone: "danger" } : e.marking?.status === "pending" ? { label: "marking…", tone: "info" } : { label: "confirmed", tone: "primary" }, ge = (e) => ({
+}, Qe = (e) => e === "confident" ? "success" : e === "ambiguous" ? "warning" : e === "unmatched" ? "danger" : "neutral", We = (e) => e === "confirmed" ? "success" : e === "rejected" ? "danger" : "neutral", B = (e, l) => we(e, l), Ge = (e) => e.decision === void 0 ? { label: Ke[e.verdict], tone: Qe(e.verdict) } : e.decision.status !== "confirmed" ? { label: e.decision.status, tone: We(e.decision.status) } : e.verification?.paidInSaldeo === !0 ? { label: "paid in Saldeo", tone: "success" } : e.marking?.status === "ok" ? { label: "marked", tone: "success" } : e.marking?.status === "failed" ? { label: "marking failed", tone: "danger" } : e.marking?.status === "pending" ? { label: "marking…", tone: "info" } : { label: "confirmed", tone: "primary" }, ge = (e) => ({
   agent: e.provider,
   model: e.model,
   ...e.account === void 0 ? {} : { account: e.account },
@@ -79,14 +79,14 @@ const W = {
   ...e.effort === void 0 ? {} : { effort: e.effort },
   ...e.thinking === void 0 ? {} : { thinking: e.thinking },
   ...e.fast === void 0 ? {} : { fast: e.fast }
-}), Ge = (e) => [
+}), He = (e) => [
   ["Data", "Kwota", "Waluta", "Kontrahent", "Tytuł", "Faktury", "Potwierdzono", "Oznaczono w Saldeo", "Zweryfikowano"].join(";"),
   ...e.map(
-    (l) => [l.date, $e(l.amount).replace(/ /g, ""), l.currency, l.counterparty, l.title, l.invoices, l.confirmedAt, l.marked, l.verified].map((s) => `"${String(s).replaceAll('"', '""')}"`).join(";")
+    (l) => [l.date, we(l.amount).replace(/ /g, ""), l.currency, l.counterparty, l.title, l.invoices, l.confirmedAt, l.marked, l.verified].map((s) => `"${String(s).replaceAll('"', '""')}"`).join(";")
   )
 ].join(`\r
-`), He = "/x/intentic.saldeo", Z = "saldeo", Y = (e, l = "POST") => ({ method: l, body: JSON.stringify(e), headers: { "content-type": "application/json" } }), U = async (e, l) => {
-  const s = await D().sandbox.request(`${He}${e}`, l), u = await s.text();
+`), Z = "saldeo", Y = (e, l = "POST") => ({ method: l, body: JSON.stringify(e), headers: { "content-type": "application/json" } }), U = async (e, l) => {
+  const s = await $e(D()).request(e, l), u = await s.text();
   let c;
   try {
     c = u === "" ? {} : JSON.parse(u);
@@ -132,10 +132,10 @@ const W = {
   queryKey: x(() => D().sandbox.key(Z, "ledger", e.value)),
   queryFn: () => U(W.ledger(e.value)),
   enabled: ie()
-}), we = (e) => {
-  const l = Te(), s = async () => {
-    await l.invalidateQueries({ queryKey: D().sandbox.key(Z) }), Ee();
-  }, u = (n) => De({
+}), Se = (e) => {
+  const l = De(), s = async () => {
+    await l.invalidateQueries({ queryKey: D().sandbox.key(Z) }), je();
+  }, u = (n) => Ue({
     mutationFn: n,
     onSettled: () => {
       s();
@@ -187,7 +187,7 @@ const W = {
       return (p.data.value?.invoices ?? []).filter((h) => c.value === "all" || h.direction === c.value).filter((h) => w === "" || `${h.number} ${h.contractor?.name ?? ""} ${h.contractor?.nip ?? ""}`.toLowerCase().includes(w)).sort((h, i) => (h.dueDate ?? h.issueDate).localeCompare(i.dueDate ?? i.issueDate));
     }), C = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
     return (w, h) => (o(), y("div", ot, [
-      b(t(Se), {
+      b(t(Ae), {
         modelValue: n.value,
         "onUpdate:modelValue": h[3] || (h[3] = (i) => n.value = i),
         placeholder: "Number, contractor, NIP…",
@@ -280,7 +280,7 @@ const W = {
   },
   setup(e) {
     const s = tt(_(e, "account")), u = x(() => s.data.value?.ledger.entries ?? []), c = x(
-      () => Ge(
+      () => He(
         u.value.map((n) => ({
           date: n.transaction.date,
           amount: n.transaction.amount,
@@ -305,7 +305,7 @@ const W = {
         density: "compact"
       }, {
         actions: A(() => [
-          b(t(Ae), {
+          b(t(Ce), {
             text: c.value,
             label: "Copy as CSV"
           }, null, 8, ["text"])
@@ -373,7 +373,7 @@ const W = {
   },
   emits: ["created"],
   setup(e, { emit: l }) {
-    const s = e, u = l, c = we(_(s, "account")), n = M(), p = M(), f = M(!1), C = () => n.value?.click(), w = async (h) => {
+    const s = e, u = l, c = Se(_(s, "account")), n = M(), p = M(), f = M(!1), C = () => n.value?.click(), w = async (h) => {
       const i = h.target.files?.[0];
       if (i !== void 0) {
         f.value = !0, p.value = void 0;
@@ -391,7 +391,7 @@ const W = {
       default: A(() => [
         m("div", bt, [
           m("div", xt, [
-            b(t(q), { name: "upload" }),
+            b(t(L), { name: "upload" }),
             i[1] || (i[1] = I(" Import a bank export", -1))
           ]),
           i[3] || (i[3] = m("p", { class: "text-xs text-muted" }, "A CSV as your bank exports it (mBank, PKO BP, ING, Pekao, Santander or any other). The columns are recognised where the bank is known and asked about once where it is not.", -1)),
@@ -410,7 +410,7 @@ const W = {
             onClick: C
           }, {
             default: A(() => [
-              b(t(q), { name: "paperclip" }),
+              b(t(L), { name: "paperclip" }),
               i[2] || (i[2] = I(" Choose a CSV…", -1))
             ]),
             _: 1
@@ -428,13 +428,13 @@ const W = {
 }), $t = { class: "flex flex-col gap-4" }, wt = { class: "flex flex-wrap items-center gap-2 text-sm" }, St = { class: "font-medium text-content" }, At = { class: "text-xs text-muted" }, Ct = { class: "grid gap-3 @lg:grid-cols-2" }, Vt = { class: "flex flex-col gap-1 text-xs text-muted" }, It = { class: "flex flex-col gap-1 text-xs text-muted" }, Rt = { class: "flex flex-col gap-1 text-xs text-muted" }, Pt = { class: "flex flex-wrap items-center gap-2" }, Mt = { class: "flex items-center gap-1" }, Tt = { class: "flex items-center gap-1" }, Dt = {
   key: 1,
   class: "grid grid-cols-2 gap-2"
-}, Ut = { class: "flex flex-col gap-1 text-xs text-muted" }, Nt = { class: "flex flex-col gap-1 text-xs text-muted" }, zt = { class: "grid grid-cols-2 gap-2" }, Ft = { class: "flex flex-col gap-1 text-xs text-muted" }, Ot = { class: "flex flex-col gap-1 text-xs text-muted" }, Lt = { class: "flex flex-col gap-1 text-xs text-muted" }, qt = { class: "flex items-center gap-3" }, Bt = {
+}, Ut = { class: "flex flex-col gap-1 text-xs text-muted" }, Nt = { class: "flex flex-col gap-1 text-xs text-muted" }, zt = { class: "grid grid-cols-2 gap-2" }, Ft = { class: "flex flex-col gap-1 text-xs text-muted" }, Ot = { class: "flex flex-col gap-1 text-xs text-muted" }, qt = { class: "flex flex-col gap-1 text-xs text-muted" }, Lt = { class: "flex items-center gap-3" }, Bt = {
   key: 0,
   class: "text-xs text-muted"
 }, Et = {
   key: 1,
   class: "text-xs text-muted"
-}, L = "—", jt = /* @__PURE__ */ H({
+}, q = "—", jt = /* @__PURE__ */ H({
   __name: "MappingEditor",
   props: {
     session: {},
@@ -443,11 +443,11 @@ const W = {
   },
   emits: ["apply"],
   setup(e, { emit: l }) {
-    const s = e, u = l, c = x(() => [{ value: L, label: "(none)" }, ...s.session.file.columns.map((r) => ({ value: r, label: r }))]), n = M(""), p = M("signed"), f = M(L), C = M(L), w = M(L), h = M(""), i = M(L), P = M(L), R = M(L), g = M("PLN"), z = M("6"), K = (r) => {
-      n.value = r?.date ?? "", p.value = r?.credit !== void 0 && r.debit !== void 0 ? "split" : "signed", f.value = r?.amount ?? L, C.value = r?.credit ?? L, w.value = r?.debit ?? L, h.value = r?.title ?? "", i.value = r?.counterparty ?? L, P.value = r?.account ?? L, R.value = r?.currency ?? L, g.value = r?.defaultCurrency ?? "PLN";
+    const s = e, u = l, c = x(() => [{ value: q, label: "(none)" }, ...s.session.file.columns.map((r) => ({ value: r, label: r }))]), n = M(""), p = M("signed"), f = M(q), C = M(q), w = M(q), h = M(""), i = M(q), P = M(q), R = M(q), g = M("PLN"), z = M("6"), K = (r) => {
+      n.value = r?.date ?? "", p.value = r?.credit !== void 0 && r.debit !== void 0 ? "split" : "signed", f.value = r?.amount ?? q, C.value = r?.credit ?? q, w.value = r?.debit ?? q, h.value = r?.title ?? "", i.value = r?.counterparty ?? q, P.value = r?.account ?? q, R.value = r?.currency ?? q, g.value = r?.defaultCurrency ?? "PLN";
     };
     ye(() => s.session.id, () => K(s.session.mapping), { immediate: !0 });
-    const F = (r) => r === L || r === "" ? void 0 : r, J = x(() => {
+    const F = (r) => r === q || r === "" ? void 0 : r, J = x(() => {
       const r = F(n.value), v = F(h.value);
       if (r === void 0 || v === void 0)
         return;
@@ -595,7 +595,7 @@ const W = {
             ])
           ])
         ]),
-        m("label", Lt, [
+        m("label", qt, [
           v[22] || (v[22] = I("Look for invoices this many months before the earliest transaction ", -1)),
           ne(m("input", {
             "onUpdate:modelValue": v[11] || (v[11] = (V) => z.value = V),
@@ -616,7 +616,7 @@ const W = {
         key: 0,
         of: { tone: "danger", title: "Mapping refused", detail: e.error }
       }, null, 8, ["of"])) : S("", !0),
-      m("div", qt, [
+      m("div", Lt, [
         b(t(X), {
           disabled: J.value === void 0 || e.busy,
           loading: e.busy,
@@ -670,7 +670,7 @@ const W = {
   },
   emits: ["decide"],
   setup(e, { emit: l }) {
-    const s = e, u = l, c = M(s.item.decision === void 0 && s.item.verdict !== "confident" && s.item.verdict !== "ignored"), n = x(() => We(s.item)), p = x(() => n.value.tone === "danger" ? "danger" : n.value.tone === "warning" ? "warning" : n.value.tone === "success" ? "success" : "default"), f = (T) => s.session.invoices.find((a) => a.id === T), C = x(() => Math.abs(s.transaction?.amount ?? 0)), w = x(() => (s.transaction?.amount ?? 0) >= 0 ? "in" : "out"), h = x(() => {
+    const s = e, u = l, c = M(s.item.decision === void 0 && s.item.verdict !== "confident" && s.item.verdict !== "ignored"), n = x(() => Ge(s.item)), p = x(() => n.value.tone === "danger" ? "danger" : n.value.tone === "warning" ? "warning" : n.value.tone === "success" ? "success" : "default"), f = (T) => s.session.invoices.find((a) => a.id === T), C = x(() => Math.abs(s.transaction?.amount ?? 0)), w = x(() => (s.transaction?.amount ?? 0) >= 0 ? "in" : "out"), h = x(() => {
       const T = new Set(s.item.proposals.flatMap((a) => a.invoices.map((d) => d.invoiceId)));
       return s.session.invoices.filter((a) => !a.isPaid && a.remaining > 0 && a.direction === w.value && a.currency === (s.transaction?.currency ?? "PLN")).sort((a, d) => Number(T.has(d.id)) - Number(T.has(a.id)) || d.issueDate.localeCompare(a.issueDate)).map((a) => ({
         value: a.id,
@@ -737,7 +737,7 @@ const W = {
                 class: N(t(O).textAction()),
                 onClick: a[0] || (a[0] = (d) => u("decide", e.item.transactionId, "cleared"))
               }, [
-                b(t(q), { name: "undo" }),
+                b(t(L), { name: "undo" }),
                 a[7] || (a[7] = I(" Undo this decision", -1))
               ], 2)
             ])
@@ -767,7 +767,7 @@ const W = {
                       onClick: (v) => F(d)
                     }, {
                       default: A(() => [
-                        b(t(q), { name: "check" }),
+                        b(t(L), { name: "check" }),
                         a[8] || (a[8] = I(" Confirm", -1))
                       ]),
                       _: 1
@@ -809,7 +809,7 @@ const W = {
                 onClick: J
               }, {
                 default: A(() => [
-                  b(t(q), { name: "check" }),
+                  b(t(L), { name: "check" }),
                   a[11] || (a[11] = I(" Confirm", -1))
                 ]),
                 _: 1
@@ -821,7 +821,7 @@ const W = {
                   onClick: a[3] || (a[3] = (d) => u("decide", e.item.transactionId, "rejected", [], void 0))
                 }, {
                   default: A(() => [
-                    b(t(q), { name: "times" }),
+                    b(t(L), { name: "times" }),
                     a[12] || (a[12] = I(" Reject", -1))
                   ]),
                   _: 1
@@ -832,7 +832,7 @@ const W = {
                   onClick: a[4] || (a[4] = (d) => u("decide", e.item.transactionId, "skipped", [], void 0))
                 }, {
                   default: A(() => [
-                    b(t(q), { name: "ban" }),
+                    b(t(L), { name: "ban" }),
                     a[13] || (a[13] = I(" Not an invoice", -1))
                   ]),
                   _: 1
@@ -930,7 +930,7 @@ const W = {
             disabled: e.actions.rematch.isPending.value,
             onClick: d[0] || (d[0] = (r) => g("re-matching", () => e.actions.rematch.mutateAsync(e.session.id)))
           }, [
-            b(t(q), {
+            b(t(L), {
               name: "refresh",
               spin: e.actions.rematch.isPending.value
             }, null, 8, ["spin"]),
@@ -943,7 +943,7 @@ const W = {
             disabled: e.actions.verify.isPending.value || w.value.confirmed === 0,
             onClick: d[1] || (d[1] = (r) => g("verifying", () => e.actions.verify.mutateAsync(e.session.id)))
           }, [
-            b(t(q), {
+            b(t(L), {
               name: "check-circle",
               spin: e.actions.verify.isPending.value
             }, null, 8, ["spin"]),
@@ -955,11 +955,11 @@ const W = {
             title: "Delete this session",
             onClick: d[2] || (d[2] = (r) => C.value = !0)
           }, [
-            b(t(q), { name: "trash" })
+            b(t(L), { name: "trash" })
           ], 2)
         ])
       ]),
-      b(t(Ce), { items: h.value }, null, 8, ["items"]),
+      b(t(Ve), { items: h.value }, null, 8, ["items"]),
       e.skipped.length > 0 ? (o(), $(t(j), {
         key: 0,
         of: { tone: "warning", title: `${e.skipped.length} row${e.skipped.length === 1 ? "" : "s"} could not be read`, detail: e.skipped.map((r) => `row ${r.row}: ${r.reason}`).join("; ") }
@@ -976,7 +976,7 @@ const W = {
           onClick: d[4] || (d[4] = (r) => g("confirming", () => e.actions.confirmAll.mutateAsync(e.session.id)))
         }, {
           default: A(() => [
-            b(t(q), { name: "check" }),
+            b(t(L), { name: "check" }),
             I(" Confirm " + k(w.value.confident) + " confident ", 1)
           ]),
           _: 1
@@ -1013,7 +1013,7 @@ const W = {
           class: N(t(O).textAction("ml-auto")),
           onClick: d[6] || (d[6] = (r) => t(c).chat.openAgent(T.value.conversationId))
         }, [
-          b(t(q), { name: "comments" }),
+          b(t(L), { name: "comments" }),
           I(" last run: " + k(T.value.kind === "mark" ? "marking" : "resolving") + " " + k(t(ae)(Date.parse(T.value.startedAt))), 1)
         ], 2)) : S("", !0)
       ]),
@@ -1039,7 +1039,7 @@ const W = {
           class: N(t(O).emptyState())
         }, "Nothing here" + k(i.value === "decide" ? ": every row is decided" : "") + ".", 3)) : S("", !0)
       ]),
-      b(t(Ve), {
+      b(t(Ie), {
         open: C.value,
         header: "Delete this session?",
         "confirm-label": "Delete",
@@ -1059,7 +1059,7 @@ const W = {
 }), Dn = { class: "grid gap-4 @3xl:grid-cols-[minmax(14rem,18rem)_1fr]" }, Un = { class: "flex min-w-0 flex-col gap-3" }, Nn = { key: 0 }, zn = { key: 1 }, Fn = {
   key: 0,
   class: "text-link"
-}, On = { key: 1 }, Ln = ["title"], qn = { class: "min-w-0" }, Bn = {
+}, On = { key: 1 }, qn = ["title"], Ln = { class: "min-w-0" }, Bn = {
   key: 2,
   class: "text-sm text-muted"
 }, En = /* @__PURE__ */ H({
@@ -1074,7 +1074,7 @@ const W = {
     const l = e, s = D(), u = _(l, "account"), c = Ze(u), n = x({
       get: () => s.route.query().session,
       set: (P) => s.route.setQuery({ session: P })
-    }), p = Xe(u, n), f = we(u), C = x(() => (c.data.value?.sessions ?? []).filter((P) => P.company === l.company)), w = x(() => p.data.value?.session), h = x(() => p.data.value?.skipped ?? []), i = async (P, R) => {
+    }), p = Xe(u, n), f = Se(u), C = x(() => (c.data.value?.sessions ?? []).filter((P) => P.company === l.company)), w = x(() => p.data.value?.session), h = x(() => p.data.value?.skipped ?? []), i = async (P, R) => {
       n.value !== void 0 && await f.applyMapping.mutateAsync({ id: n.value, mapping: P, lookbackMonths: R });
     };
     return (P, R) => (o(), y("div", Dn, [
@@ -1108,7 +1108,7 @@ const W = {
               meta: A(() => [
                 m("span", {
                   title: g.createdAt
-                }, k(t(ae)(Date.parse(g.createdAt))), 9, Ln)
+                }, k(t(ae)(Date.parse(g.createdAt))), 9, qn)
               ]),
               _: 2
             }, 1032, ["selected", "title", "onClick"]))), 128)),
@@ -1124,12 +1124,12 @@ const W = {
           of: { tone: "danger", title: "Could not list statements", detail: t(c).error.value.message }
         }, null, 8, ["of"])) : S("", !0)
       ]),
-      m("section", qn, [
+      m("section", Ln, [
         n.value === void 0 ? (o(), y("div", {
           key: 0,
           class: N(t(O).emptyState("py-10"))
         }, [
-          b(t(q), { name: "upload" }),
+          b(t(L), { name: "upload" }),
           R[2] || (R[2] = m("p", { class: "mt-2" }, "Import a bank export on the left, or open a statement. Matches are proposed; nothing is written to SaldeoSMART until you confirm and start the marking run.", -1))
         ], 2)) : t(p).error.value ? (o(), $(t(j), {
           key: 1,
@@ -1205,7 +1205,7 @@ const W = {
     account: {}
   },
   setup(e) {
-    const l = e, s = D(), u = x(() => l.account ?? se(s.workspace.capabilities())[0]?.id ?? "saldeosmart"), c = x(() => se(s.workspace.capabilities()).find((g) => g.id === u.value)), n = x(() => Oe(s.workspace.capabilities())), p = Je(u), f = Ye(u), C = [
+    const l = e, s = D(), u = x(() => l.account ?? se(s.workspace.capabilities())[0]?.id ?? "saldeosmart"), c = x(() => se(s.workspace.capabilities()).find((g) => g.id === u.value)), n = x(() => qe(s.workspace.capabilities())), p = Je(u), f = Ye(u), C = [
       { label: "Reconcile", value: "reconcile" },
       { label: "Invoices", value: "invoices" },
       { label: "Bank statements", value: "statements" },
@@ -1226,10 +1226,10 @@ const W = {
       const g = p.data.value;
       return g === void 0 ? `SaldeoSMART, as ${c.value?.username ?? u.value}` : `SaldeoSMART as ${g.username}${g.reachable ? "" : " · not answering"}${g.detail === void 0 || !g.reachable ? "" : ` · ${g.detail}`}`;
     });
-    return (g, z) => (o(), $(t(Ie), { width: "wide" }, {
+    return (g, z) => (o(), $(t(Re), { width: "wide" }, {
       default: A(() => [
         m("div", Wn, [
-          b(t(Re), {
+          b(t(Pe), {
             title: "Saldeo",
             description: R.value
           }, {

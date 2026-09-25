@@ -1,7 +1,7 @@
 import { type Disposable, sandboxPoll } from "@intentic/extension-api";
 import type { SessionSummary } from "./core/contract.ts";
 import { ROUTES } from "./core/wire.ts";
-import { host } from "./host.ts";
+import { backendOf, host } from "./host.ts";
 import { saldeoAccounts } from "./view/facts.ts";
 
 // The tile's claim on attention: items in any session that await the owner's decision (a proposal with no decision
@@ -22,7 +22,7 @@ const poll = sandboxPoll<Awaiting>({
         const byAccount: Record<string, number> = {};
         for (const account of saldeoAccounts(api.workspace.capabilities())) {
             try {
-                const { sessions } = await api.sandbox.json<{ sessions: SessionSummary[] }>(`/x/intentic.saldeo${ROUTES.sessions(account.id)}`);
+                const { sessions } = await backendOf(api).json<{ sessions: SessionSummary[] }>(ROUTES.sessions(account.id));
                 byAccount[account.id] = sessions.reduce((sum, session) => sum + session.counts.awaiting, 0);
             } catch {
                 byAccount[account.id] = 0;

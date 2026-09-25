@@ -18,7 +18,6 @@
     },
     "devDependencies": {
         "@intentic/extension-manifest": "^1.270.0",
-        "@modelcontextprotocol/sdk": "^1.30.0",
         "@tanstack/vue-query": "^5.90.2",
         "@types/node": "^24.0.0",
         "@vitejs/plugin-vue": "^6.0.1",

@@ -1,20 +1,20 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { ExtensionServerApi, ExtensionServerContext } from "@intentic/extension-api";
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { DEFAULT_BASE_URL, type Session } from "../core/contract.ts";
 import { formatAmount } from "../core/money.ts";
 import { SaldeoError, type SaldeoClientOptions } from "../core/saldeo/client.ts";
 import { type AccountConnection, BadRequest, createService, NotFound, type SaldeoService, ScopeRefused, scopesOf } from "../core/service.ts";
 import { StoreConflict, updateSession } from "../core/store/store.ts";
 import type { AgentRunRequest, DecideAllRequest, DecideRequest, ImportRequest, MappingRequest, MarkRequest, RecordMarkingRequest } from "../core/wire.ts";
-import { saldeoMcpServer } from "../mcp/tools.ts";
+import { saldeoTools } from "../mcp/tools.ts";
+import { toolsOf } from "./tools-api.ts";
 
 // Backend half: the Saldeo view's whole data plane, served from this extension's /x namespace. Credentials come from
 // the daemon's connection read (a capability's stored config, secrets included, which only a declared backend may
 // call); state lives in the workspace's records; the two agent turns it can start go through POST /agent.
-// It also serves the agent's MCP tools at `mcp/<card>`, the manifest's `mcp`: the daemon mounts that into every turn
-// granted the card, so every session shares this one process instead of spawning a stdio server of its own.
+// It also hands the host the agent's tools (`contributes.tools`, per SaldeoSMART card): the daemon mounts them into every
+// turn granted the card, on every runtime, and forwards the card's settings with each call.
 
-const CONNECTION_TTL_MS = 60_000;
 const TITLE_MAX = 80;
 const RUN_ROLE = "saldeo-reconcile";
 
@@ -54,35 +54,45 @@ let sequence = 0;
 const mintConversationId = (kind: string, sessionId: string, now: number): string =>
     `saldeo-${kind}-${sessionId.replaceAll(/[^a-z0-9-]/g, "-").slice(0, 24)}-${now.toString(36)}${(sequence++).toString(36)}`;
 
-// One place that turns a capability into a connection: reads the card's config through the daemon, once a minute.
+// A card's settings as a connection; refuses a card that is not a SaldeoSMART API card.
+export const connectionOf = (account: string, kind: string, config: Readonly<Record<string, string | undefined>>): AccountConnection => {
+    const { provider, username, apiToken, baseUrl, company } = config;
+    if (kind !== "cli" || provider !== "saldeosmart" || username === undefined || apiToken === undefined) {
+        throw new NotFound(`"${account}" is not a connected SaldeoSMART API card`);
+    }
+    return {
+        account,
+        credentials: { username, apiToken, baseUrl: baseUrl === undefined || baseUrl === "" ? DEFAULT_BASE_URL : baseUrl },
+        ...(company === undefined || company === "" ? {} : { company }),
+        scopes: scopesOf(config),
+    };
+};
+
+// One place that turns a capability into a connection. A tool call runs with the card the host handed it (`handing`),
+// which is the card as the daemon holds it now; anything else (the view's requests) reads the card through the daemon
+// every time, never a copy, so a switch the owner flips binds on the next request either way.
 export const connectionReader = (
     read: (id: string) => Promise<ConnectionRead>,
-    now: () => number = Date.now,
-): ((account: string) => Promise<AccountConnection>) => {
-    const cache = new Map<string, { at: number; connection: AccountConnection }>();
-    return async (account) => {
-        const cached = cache.get(account);
-        if (cached !== undefined && now() - cached.at < CONNECTION_TTL_MS) {
-            return cached.connection;
-        }
-        let read_: ConnectionRead;
-        try {
-            read_ = await read(account);
-        } catch (error) {
-            throw new NotFound(`no SaldeoSMART connection "${account}": ${error instanceof Error ? error.message : String(error)}`);
-        }
-        const { provider, username, apiToken, baseUrl, company } = read_.config;
-        if (read_.kind !== "cli" || provider !== "saldeosmart" || username === undefined || apiToken === undefined) {
-            throw new NotFound(`"${account}" is not a connected SaldeoSMART API card`);
-        }
-        const connection: AccountConnection = {
-            account,
-            credentials: { username, apiToken, baseUrl: baseUrl === undefined || baseUrl === "" ? DEFAULT_BASE_URL : baseUrl },
-            ...(company === undefined || company === "" ? {} : { company }),
-            scopes: scopesOf(read_.config),
-        };
-        cache.set(account, { at: now(), connection });
-        return connection;
+): {
+    readonly connection: (account: string) => Promise<AccountConnection>;
+    readonly handing: <T>(connection: AccountConnection, run: () => T) => T;
+} => {
+    const handed = new AsyncLocalStorage<AccountConnection>();
+    return {
+        handing: (connection, run) => handed.run(connection, run),
+        connection: async (account) => {
+            const known = handed.getStore();
+            if (known?.account === account) {
+                return known;
+            }
+            let read_: ConnectionRead;
+            try {
+                read_ = await read(account);
+            } catch (error) {
+                throw new NotFound(`no SaldeoSMART connection "${account}": ${error instanceof Error ? error.message : String(error)}`);
+            }
+            return connectionOf(account, read_.kind, read_.config);
+        },
     };
 };
 
@@ -115,8 +125,12 @@ export interface ServerOptions {
 }
 
 export const activateServer = (api: ExtensionServerApi, _context: ExtensionServerContext, options: ServerOptions = {}): void => {
-    const connection = connectionReader((id) => api.daemon.json<ConnectionRead>(`/capabilities/${encodeURIComponent(id)}/connection`));
-    const service = createService({ workspaceRoot: api.workspaceRoot, connection, ...(options.clientOptions === undefined ? {} : { clientOptions: options.clientOptions }) });
+    const reader = connectionReader((id) => api.daemon.json<ConnectionRead>(`/capabilities/${encodeURIComponent(id)}/connection`));
+    const service = createService({
+        workspaceRoot: api.workspaceRoot,
+        connection: reader.connection,
+        ...(options.clientOptions === undefined ? {} : { clientOptions: options.clientOptions }),
+    });
 
     const browserAccountOf = async (id: string): Promise<string> => {
         const read = await api.daemon.json<ConnectionRead>(`/capabilities/${encodeURIComponent(id)}/connection`).catch(() => undefined);
@@ -142,22 +156,19 @@ export const activateServer = (api: ExtensionServerApi, _context: ExtensionServe
         return { conversationId };
     };
 
-    // Stateless Streamable HTTP (no session id generator): a fresh server per request, built from the card as it reads now, so a switch flipped
-    // on the card changes the tool list on the next call without anything to invalidate. SSE answers (not JSON) put
-    // the headers out before the tool runs, so a slow SaldeoSMART read never trips the daemon proxy's header deadline.
-    const serveMcp = async (request: Request, account: string): Promise<Response> => {
-        const server = saldeoMcpServer(service, await connection(account));
-        const transport = new WebStandardStreamableHTTPServerTransport({});
-        await server.connect(transport);
-        return transport.handleRequest(request);
-    };
+    // The agent's tools for the card the host was asked about, with the settings it handed: one list per request, so a
+    // switch flipped on the card changes the tools on the next call. An extension-level server (no card) has none.
+    toolsOf(api).serve((card) => {
+        if (card === undefined) {
+            return [];
+        }
+        const connection = connectionOf(card.id, "cli", card.config);
+        return saldeoTools(service, connection).map((tool) => ({ ...tool, call: (args, context) => reader.handing(connection, () => tool.call(args, context)) }));
+    });
 
     const handle = async (request: Request): Promise<Response | undefined> => {
         const url = new URL(request.url);
         const parts = url.pathname.split("/").filter((part) => part !== "");
-        if (parts[0] === "mcp" && parts[1] !== undefined && parts.length === 2) {
-            return serveMcp(request, decodeURIComponent(parts[1]));
-        }
         if (parts[0] !== "accounts" || parts[1] === undefined) {
             return undefined;
         }

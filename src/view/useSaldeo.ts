@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/vue-query";
 import { computed, type Ref, unref } from "vue";
-import { type Allocation, type DecideAsk, type Mapping, SALDEO_BASE } from "../core/contract.ts";
+import type { Allocation, DecideAsk, Mapping } from "../core/contract.ts";
 import { ROUTES } from "../core/wire.ts";
 import type {
     AgentRunRequest,
@@ -15,7 +15,7 @@ import type {
     StatusResponse,
 } from "../core/wire.ts";
 import { refreshBadge } from "../badge.ts";
-import { host } from "../host.ts";
+import { backendOf, host } from "../host.ts";
 
 // The view's reads and writes, all through the extension's own backend namespace; no `permissions.sandbox` entry is
 // needed for that. Query keys start with `saldeo`, the name the manifest's `contributes.files` invalidates when the
@@ -26,7 +26,7 @@ const KEY = `saldeo`;
 const post = (body: unknown, method = `POST`): RequestInit => ({ method, body: JSON.stringify(body), headers: { "content-type": `application/json` } });
 
 const call = async <T>(path: string, init?: RequestInit): Promise<T> => {
-    const response = await host().sandbox.request(`${SALDEO_BASE}${path}`, init);
+    const response = await backendOf(host()).request(path, init);
     const text = await response.text();
     let parsed: unknown;
     try {
