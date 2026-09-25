@@ -12,7 +12,7 @@ ones, when the owner presses *Ask the agent*, or when they ask you directly.
 
 ## The loop
 
-1. `saldeo_session` (account, session id) → the unresolved transactions, the matcher's candidates with reasons, and
+1. `saldeo_session` (session id, on the server named after the session's SaldeoSMART card) → the unresolved transactions, the matcher's candidates with reasons, and
    the pool of open invoices (direction `in` for money arriving = sales; `out` for money leaving = cost documents).
 2. For each transaction, look for evidence, in this order of strength:
    - an invoice number in the title (payers drop the letters and mangle separators: `FV/12/2026`, `fv 12 2026`,

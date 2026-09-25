@@ -7,14 +7,15 @@ description: The owner's SaldeoSMART (Polish accounting SaaS) over its API — c
 
 The `${id}` capability is a SaldeoSMART API login. Its fields are in your environment already
 (`$SALDEO_USERNAME`, `$SALDEO_API_TOKEN`, `$SALDEO_URL`, `$SALDEO_COMPANY`, `$SALDEO_SCOPE_DOCUMENTS`,
-`$SALDEO_SCOPE_INVOICES`, `$SALDEO_SCOPE_BANK`, `$SALDEO_SCOPE_PROPOSE`); the tools read them themselves. Never pass
-the token on a command line and never print it.
+`$SALDEO_SCOPE_INVOICES`, `$SALDEO_SCOPE_BANK`, `$SALDEO_SCOPE_PROPOSE`); the CLI reads them itself, the MCP tools
+read the card through the daemon. Never pass the token on a command line and never print it.
 
 Two ways in, same operations:
 
 - **MCP tools** `saldeo_status`, `saldeo_companies`, `saldeo_contractors`, `saldeo_invoices`, `saldeo_documents`,
   `saldeo_bank_statements`, `saldeo_sessions`, `saldeo_session`, `saldeo_propose`, `saldeo_skip`,
-  `saldeo_record_marking` (the `saldeo` server; the `saldeo-reconcile` skill explains the reconciliation ones).
+  `saldeo_record_marking` (the `${id}` server, one per connected card, so they need no account; the
+  `saldeo-reconcile` skill explains the reconciliation ones).
 - **The `saldeo` CLI** on your PATH, for a shell: `saldeo status`, `saldeo invoices --months 3`,
   `saldeo documents --number "FV/12/2026"`, `saldeo session <id>`, … (`saldeo help`). Add `--json` for data.
 

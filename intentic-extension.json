@@ -37,6 +37,7 @@
             {
                 "id": "saldeosmart",
                 "kind": "cli",
+                "mcp": "mcp",
                 "catalog": {
                     "name": "SaldeoSMART",
                     "icon": "credit-card",

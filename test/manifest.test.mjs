@@ -15,10 +15,10 @@ test(`parses with the published schema and installs under the identity the listi
 });
 
 test(`every path the manifest promises exists, and the shipped tools are executable`, async () => {
-    for (const path of [manifest.entry, manifest.server, `${manifest.contributes.bin}/saldeo`, `${manifest.contributes.bin}/saldeo-mcp`]) {
+    for (const path of [manifest.entry, manifest.server, `${manifest.contributes.bin}/saldeo`]) {
         await access(here(path), constants.R_OK);
     }
-    for (const tool of [`saldeo`, `saldeo-mcp`]) {
+    for (const tool of [`saldeo`]) {
         const mode = (await stat(here(`${manifest.contributes.bin}/${tool}`))).mode;
         assert.ok(mode & 0o111, `${tool} is not executable: the daemon only puts the directory on PATH`);
         assert.match(await readFile(here(`${manifest.contributes.bin}/${tool}`), `utf8`), /^#!\/usr\/bin\/env node\n/u);
@@ -28,15 +28,15 @@ test(`every path the manifest promises exists, and the shipped tools are executa
     }
 });
 
-test(`the plugin is a Claude Code plugin whose MCP server is the shipped binary`, async () => {
+test(`the MCP tools come from the backend, not from a process the plugin spawns per session`, async () => {
     const plugin = manifest.contributes.agent.path;
     await access(here(`${plugin}/.claude-plugin/plugin.json`), constants.R_OK);
-    const mcp = JSON.parse(await readFile(here(`${plugin}/.mcp.json`), `utf8`));
-    const command = mcp.mcpServers.saldeo.command;
-    assert.match(command, /^\$\{CLAUDE_PLUGIN_ROOT\}\//u);
-    // Resolved against the plugin directory, the command must be the built MCP binary.
-    await access(here(`${plugin}/${command.replace(`\${CLAUDE_PLUGIN_ROOT}/`, ``)}`), constants.X_OK);
     await access(here(`${plugin}/skills/saldeo-reconcile/SKILL.md`), constants.R_OK);
+    // A stdio server here would be spawned again by every session; the daemon mounts the backend's `mcp` route instead.
+    await assert.rejects(access(here(`${plugin}/.mcp.json`)));
+    const [api] = manifest.contributes.capabilities;
+    assert.equal(api.mcp, `mcp`);
+    assert.ok(manifest.server, `the endpoint is served by the backend`);
 });
 
 test(`the two cards: an API card with the permission switches, and a browser card for the writes the API lacks`, () => {

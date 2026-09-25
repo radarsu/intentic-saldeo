@@ -1,35 +1,73 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
-import type { Server } from "node:http";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
+import type { ExtensionServerApi } from "@intentic/extension-api";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Session } from "../src/core/contract.ts";
 import { createService } from "../src/core/service.ts";
-import { fakeFetch, fakeServer, type FakeState } from "./helpers/fake-saldeo.ts";
+import { activateServer } from "../src/server/server.ts";
+import { fakeFetch, type FakeState } from "./helpers/fake-saldeo.ts";
 
-/* The BUILT MCP binary, spawned the way the plugin's .mcp.json spawns it, against a fake SaldeoSMART on a real port. */
+/* The MCP tools as the daemon reaches them: Streamable HTTP into the backend's `mcp/<card>` route, the card read
+   through a fake daemon, against a fake SaldeoSMART. */
 
-const BINARY = new URL(`../dist/bin/saldeo-mcp`, import.meta.url).pathname;
+const BASE = "https://saldeo.test";
 
 let root = "";
-let fake: { server: Server; url: string };
+let handler: (request: Request) => Promise<Response | undefined>;
 const state: FakeState = { paid65: false, calls: [] };
 
-const envFor = (over: Record<string, string> = {}): Record<string, string> => ({
-    PATH: process.env["PATH"] ?? "",
-    SALDEO_USERNAME_SALDEOSMART: "user",
-    SALDEO_API_TOKEN_SALDEOSMART: "token",
-    SALDEO_URL_SALDEOSMART: fake.url,
-    SALDEO_COMPANY_SALDEOSMART: "abc.1",
-    ...over,
+const card = (id: string, switches: Record<string, string> = {}) => ({
+    id,
+    kind: "cli",
+    config: { provider: "saldeosmart", username: "user", apiToken: "token", baseUrl: BASE, company: "abc.1", documents: "on", invoices: "on", bankStatements: "on", propose: "on", ...switches },
 });
 
-const connect = async (env: Record<string, string>): Promise<Client> => {
+before(async () => {
+    root = await mkdtemp(join(tmpdir(), "saldeo-mcp-"));
+    const connections: Record<string, unknown> = {
+        saldeosmart: card("saldeosmart"),
+        narrow: card("narrow", { propose: "off", bankStatements: "off" }),
+    };
+    const api: ExtensionServerApi = {
+        apiVersion: "2.14.0",
+        workspaceRoot: root,
+        extensionDir: root,
+        log: () => {},
+        routes: {
+            mount: (mounted) => {
+                handler = mounted;
+            },
+        },
+        daemon: {
+            request: () => Promise.reject(new Error("unused")),
+            json: async <T>(path: string): Promise<T> => {
+                const id = /^\/capabilities\/([^/]+)\/connection$/.exec(path)?.[1];
+                const connection = id === undefined ? undefined : connections[decodeURIComponent(id)];
+                if (connection === undefined) {
+                    throw new Error(`daemon answered 404 for GET ${path}`);
+                }
+                return connection as T;
+            },
+        },
+    };
+    activateServer(api, { extensionId: "intentic.saldeo" }, { clientOptions: { fetch: fakeFetch(state), perMinute: 10_000 } });
+});
+after(async () => {
+    await rm(root, { recursive: true, force: true });
+});
+
+// Straight into the mounted handler, the way the backend host hands it a request the daemon forwarded.
+const inProcess: typeof fetch = async (input, init) => (await handler(new Request(input, init))) ?? new Response("not found", { status: 404 });
+
+const connect = async (account: string): Promise<Client> => {
     const client = new Client({ name: "test", version: "0" });
-    await client.connect(new StdioClientTransport({ command: BINARY, args: [], env, cwd: root, stderr: "pipe" }));
+    const transport = new StreamableHTTPClientTransport(new URL(`http://extension.internal/mcp/${account}`), { fetch: inProcess });
+    // The SDK's own classes disagree under exactOptionalPropertyTypes (`sessionId?: string` vs `string | undefined`).
+    await client.connect(transport as Parameters<Client["connect"]>[0]);
     return client;
 };
 
@@ -38,47 +76,37 @@ const textOf = (result: Awaited<ReturnType<Client["callTool"]>>): string => {
     return content.map((entry) => entry.text ?? "").join("");
 };
 
-before(async () => {
-    root = await mkdtemp(join(tmpdir(), "saldeo-mcp-"));
-    await mkdir(join(root, ".intentic"), { recursive: true });
-    fake = await fakeServer(state);
-});
-after(async () => {
-    fake.server.close();
-    await rm(root, { recursive: true, force: true });
-});
-
-test("with no card in the environment only saldeo_status exists, and it says so", async () => {
-    const client = await connect({ PATH: process.env["PATH"] ?? "" });
-    const tools = (await client.listTools()).tools.map((tool) => tool.name);
-    assert.deepEqual(tools, ["saldeo_status"]);
-    assert.match(textOf(await client.callTool({ name: "saldeo_status", arguments: {} })), /no card is connected, or the persona withholds it/);
-    await client.close();
+test("a card that is not connected has no MCP endpoint", async () => {
+    await assert.rejects(connect("missing"));
 });
 
 test("the card's switches decide which tools exist", async () => {
-    const client = await connect(envFor({ SALDEO_SCOPE_PROPOSE_SALDEOSMART: "off", SALDEO_SCOPE_BANK_SALDEOSMART: "off" }));
+    const client = await connect("narrow");
     const tools = (await client.listTools()).tools.map((tool) => tool.name);
     assert.deepEqual(tools, ["saldeo_status", "saldeo_companies", "saldeo_contractors", "saldeo_invoices", "saldeo_documents"]);
     await client.close();
 });
 
 test("reads reach SaldeoSMART over the URL the card holds, and proposals land in the shared session file", async () => {
-    // A session created by the backend's half, as the owner would have: the binary must find it in the same records.
-    const service = createService({ workspaceRoot: root, connection: () => Promise.resolve({ account: "saldeosmart", credentials: { username: "user", apiToken: "token", baseUrl: fake.url }, scopes: { documents: true, invoices: true, bankStatements: true, propose: true } }), clientOptions: { fetch: fakeFetch(state), perMinute: 10_000 } });
+    // A session created by the view's half, as the owner would have: the tools must find it in the same records.
+    const service = createService({
+        workspaceRoot: root,
+        connection: () => Promise.resolve({ account: "saldeosmart", credentials: { username: "user", apiToken: "token", baseUrl: BASE }, scopes: { documents: true, invoices: true, bankStatements: true, propose: true } }),
+        clientOptions: { fetch: fakeFetch(state), perMinute: 10_000 },
+    });
     const imported = await service.importFile("saldeosmart", "abc.1", "w.csv", new TextEncoder().encode(`Data;Kwota;Tytuł;Nadawca\n2026-08-03;1 230,00;zaplata;ACME SP. Z O.O.\n`));
     const mapping = imported.mapping;
     assert.ok(mapping);
     const { session } = await service.applyMapping("saldeosmart", imported.id, mapping);
     assert.equal(session.items[0]?.verdict, "ambiguous");
 
-    const client = await connect(envFor());
+    const client = await connect("saldeosmart");
     const tools = (await client.listTools()).tools.map((tool) => tool.name);
     assert.ok(tools.includes("saldeo_propose") && tools.includes("saldeo_record_marking") && tools.includes("saldeo_bank_statements"));
 
-    const status = JSON.parse(textOf(await client.callTool({ name: "saldeo_status", arguments: {} }))) as { reachable: boolean; company: string }[];
-    assert.equal(status[0]?.reachable, true);
-    assert.equal(status[0]?.company, "abc.1");
+    const status = JSON.parse(textOf(await client.callTool({ name: "saldeo_status", arguments: {} }))) as { reachable: boolean; company: string };
+    assert.equal(status.reachable, true);
+    assert.equal(status.company, "abc.1");
 
     const invoices = JSON.parse(textOf(await client.callTool({ name: "saldeo_invoices", arguments: { months: 2 } }))) as { id: string; remainingFormatted: string }[];
     assert.deepEqual(

@@ -7,7 +7,7 @@
     "type": "module",
     "packageManager": "pnpm@12.4.1",
     "scripts": {
-        "build": "vite build && vite build --config vite.server.config.ts && vite build --config vite.cli.config.ts && vite build --config vite.mcp.config.ts && chmod +x dist/bin/saldeo dist/bin/saldeo-mcp",
+        "build": "vite build && vite build --config vite.server.config.ts && vite build --config vite.cli.config.ts && chmod +x dist/bin/saldeo",
         "typecheck": "vue-tsc --noEmit -p tsconfig.json",
         "test": "node --test test/*.test.ts test/*.test.mjs",
         "verify": "pnpm run build && pnpm run typecheck && pnpm run test"

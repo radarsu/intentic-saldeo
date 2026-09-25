@@ -18,5 +18,5 @@
         "verbatimModuleSyntax": true,
         "erasableSyntaxOnly": true
     },
-    "include": ["src/**/*.ts", "src/**/*.vue", "test/**/*.ts", "vite.config.ts", "vite.server.config.ts", "vite.cli.config.ts", "vite.mcp.config.ts"]
+    "include": ["src/**/*.ts", "src/**/*.vue", "test/**/*.ts", "vite.config.ts", "vite.server.config.ts", "vite.cli.config.ts"]
 }
