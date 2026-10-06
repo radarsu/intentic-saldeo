@@ -40,6 +40,12 @@ before(async () => {
         },
         // The tools never read the card back: the host hands it with every call.
         daemon: {
+            // The typed oRPC client these tests never reach: any property read on it fails the test loudly.
+            rpc: new Proxy({}, {
+                get: (_, name) => {
+                    throw new Error(`daemon.rpc.${String(name)} is not stubbed`);
+                },
+            }) as ExtensionServerApi["daemon"]["rpc"],
             request: () => Promise.reject(new Error("unused")),
             json: () => Promise.reject(new Error("the tools read the card the host handed, never the daemon")),
         },

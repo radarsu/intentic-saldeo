@@ -48,6 +48,12 @@ before(async () => {
         },
         tools: { serve: () => {} },
         daemon: {
+            // The typed oRPC client these tests never reach: any property read on it fails the test loudly.
+            rpc: new Proxy({}, {
+                get: (_, name) => {
+                    throw new Error(`daemon.rpc.${String(name)} is not stubbed`);
+                },
+            }) as ExtensionServerApi["daemon"]["rpc"],
             request: () => Promise.reject(new Error("unused")),
             json: async <T>(path: string, init?: RequestInit): Promise<T> => {
                 if (path === "/agent" && init?.method === "POST") {

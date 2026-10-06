@@ -1,11 +1,11 @@
 {
     "name": "intentic-saldeo",
     "version": "1.0.0",
-    "description": "SaldeoSMART for the agent and the owner — match bank payments to open invoices, confirm, and have the agent mark them paid",
+    "description": "SaldeoSMART for the agent and the owner \u2014 match bank payments to open invoices, confirm, and have the agent mark them paid",
     "license": "MIT",
     "private": true,
     "type": "module",
-    "packageManager": "pnpm@12.4.1",
+    "packageManager": "pnpm@12.9.1",
     "scripts": {
         "build": "vite build && vite build --config vite.server.config.ts && vite build --config vite.cli.config.ts && chmod +x dist/bin/saldeo",
         "typecheck": "vue-tsc --noEmit -p tsconfig.json",
@@ -13,18 +13,18 @@
         "verify": "pnpm run build && pnpm run typecheck && pnpm run test"
     },
     "dependencies": {
-        "@intentic/extension-api": "^1.270.0",
-        "@intentic/extension-ui": "^1.270.0"
+        "@intentic/extension-api": "^1.326.0",
+        "@intentic/extension-ui": "^1.326.0"
     },
     "devDependencies": {
-        "@intentic/extension-manifest": "^1.270.0",
-        "@tanstack/vue-query": "^5.90.2",
-        "@types/node": "^24.0.0",
-        "@vitejs/plugin-vue": "^6.0.1",
-        "typescript": "^5.9.3",
-        "vite": "^7.1.7",
-        "vue": "^3.5.22",
-        "vue-tsc": "^3.1.1",
-        "zod": "^4.1.0"
+        "@intentic/extension-manifest": "^1.326.0",
+        "@tanstack/vue-query": "^5.104.1",
+        "@types/node": "^24.19.1",
+        "@vitejs/plugin-vue": "^6.0.9",
+        "typescript": "^6.0.3",
+        "vite": "^8.3.2",
+        "vue": "^3.5.43",
+        "vue-tsc": "^3.3.12",
+        "zod": "^4.6.5"
     }
 }

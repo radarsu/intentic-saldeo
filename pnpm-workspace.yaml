@@ -9,10 +9,10 @@ allowBuilds:
   esbuild: true
   vue-demi: true
 minimumReleaseAgeExclude:
-  - '@intentic/base@1.270.0'
-  - '@intentic/constants@1.270.0'
-  - '@intentic/extension-api@1.270.0'
-  - '@intentic/extension-manifest@1.270.0'
-  - '@intentic/extension-ui@1.270.0'
-  - '@intentic/registry@1.270.0'
-  - '@intentic/sandbox-contract@1.270.0'
+  - '@intentic/base@1.326.0'
+  - '@intentic/constants@1.326.0'
+  - '@intentic/extension-api@1.326.0'
+  - '@intentic/extension-manifest@1.326.0'
+  - '@intentic/extension-ui@1.326.0'
+  - '@intentic/registry@1.326.0'
+  - '@intentic/sandbox-contract@1.326.0'
