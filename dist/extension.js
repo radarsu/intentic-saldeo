@@ -1073,7 +1073,6 @@ var ne = Object.defineProperty, K = (e, t, n) => () => {
 					open: T.value,
 					header: "Delete this session?",
 					"confirm-label": "Delete",
-					destructive: "",
 					loading: e.actions.remove.isPending.value,
 					onCancel: r[8] ||= (e) => T.value = !1,
 					onHide: r[9] ||= (e) => T.value = !1,

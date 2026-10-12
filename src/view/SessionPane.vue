@@ -193,7 +193,7 @@ const lastRun = computed(() => props.session.agentRuns[props.session.agentRuns.l
             <p v-if="rows.length === 0" :class="ui.emptyState()">Nothing here{{ filter === `decide` ? `: every row is decided` : `` }}.</p>
         </div>
 
-        <ConfirmDialog :open="deleting" header="Delete this session?" confirm-label="Delete" destructive :loading="actions.remove.isPending.value" @cancel="deleting = false" @hide="deleting = false" @confirm="remove">
+        <ConfirmDialog :open="deleting" header="Delete this session?" confirm-label="Delete" :loading="actions.remove.isPending.value" @cancel="deleting = false" @hide="deleting = false" @confirm="remove">
             <p class="text-sm text-muted">The imported rows, the matches and this session's ledger entries go. Nothing in SaldeoSMART changes.</p>
         </ConfirmDialog>
     </div>
