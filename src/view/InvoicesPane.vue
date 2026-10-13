@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { FilterBar, Notice, Row, RowGroup, SegmentedControl, StatusBadge, timeAgo, ui } from "@intentic/extension-ui";
+import { FilterBar, Notice, Row, RowGroup, SegmentedControl, SkeletonRows, SkeletonSnapshot, StatusBadge, timeAgo, ui, vSkeletonSource } from "@intentic/extension-ui";
 import { computed, ref, toRef } from "vue";
 import { money } from "./format.ts";
 import { useInvoices } from "./useSaldeo.ts";
@@ -39,7 +39,17 @@ const today = new Date().toISOString().slice(0, 10);
             </template>
         </FilterBar>
         <Notice v-if="invoices.error.value" :of="{ tone: `danger`, title: `Could not read invoices`, detail: invoices.error.value.message }" />
-        <RowGroup :label="scope === `open` ? `Open` : `All`" :count="visible.length" density="compact" :caption="invoices.data.value ? `read ${timeAgo(Date.parse(invoices.data.value.fetchedAt))}` : `not read yet`">
+        <!-- A read from SaldeoSMART takes seconds: the company's list as it last looked here stands in, hand-drawn rows until
+             it has been seen once. Per company, since one office's clients owe very different numbers of invoices. -->
+        <SkeletonSnapshot v-if="invoices.isLoading.value" :of="`saldeo.invoices:${company}`" label="Reading invoices from SaldeoSMART">
+            <div role="status" aria-busy="true" aria-label="Reading invoices from SaldeoSMART">
+                <RowGroup>
+                    <template #label><span class="skeleton block h-2.5 w-24" aria-hidden="true"></span></template>
+                    <SkeletonRows :rows="5" description control />
+                </RowGroup>
+            </div>
+        </SkeletonSnapshot>
+        <RowGroup v-else v-skeleton-source="`saldeo.invoices:${company}`" :label="scope === `open` ? `Open` : `All`" :count="visible.length" density="compact" :caption="invoices.data.value ? `read ${timeAgo(Date.parse(invoices.data.value.fetchedAt))}` : `not read yet`">
             <Row v-for="invoice in visible" :key="invoice.id" density="compact" :icon="invoice.direction === `in` ? `arrow-down-left` : `arrow-up-right`" :tone="invoice.dueDate !== undefined && invoice.dueDate < today && !invoice.isPaid ? `warning` : `default`">
                 <template #title>
                     <span class="flex flex-wrap items-baseline gap-x-2">
@@ -58,7 +68,6 @@ const today = new Date().toISOString().slice(0, 10);
                 </template>
             </Row>
             <p v-if="visible.length === 0 && invoices.isFetched.value" :class="ui.emptyState()">Nothing {{ scope === `open` ? `open` : `` }} in the last {{ months }} months.</p>
-            <p v-else-if="invoices.isLoading.value" class="text-xs text-muted">Reading from SaldeoSMART…</p>
         </RowGroup>
     </div>
 </template>

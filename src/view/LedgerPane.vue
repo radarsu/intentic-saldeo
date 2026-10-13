@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CopyButton, Notice, Row, RowGroup, StatusBadge, ui } from "@intentic/extension-ui";
+import { CopyButton, Notice, Row, RowGroup, SkeletonRows, SkeletonSnapshot, StatusBadge, ui, vSkeletonSource } from "@intentic/extension-ui";
 import { computed, toRef } from "vue";
 import { ledgerCsv, money } from "./format.ts";
 import { useLedger } from "./useSaldeo.ts";
@@ -30,7 +30,17 @@ const csv = computed(() =>
 <template>
     <div class="flex flex-col gap-3">
         <Notice v-if="ledger.error.value" :of="{ tone: `danger`, title: `Could not read the ledger`, detail: ledger.error.value.message }" />
-        <RowGroup label="Confirmed settlements" :count="entries.length" density="compact">
+        <!-- The ledger as it last looked here while it is read, hand-drawn rows until then; an empty group, with no rows and
+             no note, read as a ledger with nothing in it. -->
+        <SkeletonSnapshot v-if="ledger.isLoading.value" :of="`saldeo.ledger:${account}`" label="Reading the ledger">
+            <div role="status" aria-busy="true" aria-label="Reading the ledger">
+                <RowGroup>
+                    <template #label><span class="skeleton block h-2.5 w-36" aria-hidden="true"></span></template>
+                    <SkeletonRows :rows="4" description control />
+                </RowGroup>
+            </div>
+        </SkeletonSnapshot>
+        <RowGroup v-else v-skeleton-source="`saldeo.ledger:${account}`" label="Confirmed settlements" :count="entries.length" density="compact">
             <template #actions>
                 <CopyButton :text="csv" label="Copy as CSV" />
             </template>

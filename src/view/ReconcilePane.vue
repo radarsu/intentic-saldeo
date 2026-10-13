@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { Icon, Notice, Row, RowGroup, timeAgo, ui } from "@intentic/extension-ui";
+import { Icon, Notice, Row, RowGroup, SkeletonRows, SkeletonSnapshot, timeAgo, ui, vSkeletonSource } from "@intentic/extension-ui";
 import { computed, toRef } from "vue";
 import { host } from "../host.ts";
 import ImportCard from "./ImportCard.vue";
 import MappingEditor from "./MappingEditor.vue";
 import SessionPane from "./SessionPane.vue";
+import SessionSkeleton from "./SessionSkeleton.vue";
 import { useSession, useSessionActions, useSessions } from "./useSaldeo.ts";
 
 // Reconcile: the sessions (one per imported statement) beside the open one. A session without a mapping shows the
@@ -37,7 +38,17 @@ const applyMapping = async (mapping: Parameters<typeof actions.applyMapping.muta
     <div class="grid gap-4 @3xl:grid-cols-[minmax(14rem,18rem)_1fr]">
         <aside class="flex min-w-0 flex-col gap-3">
             <ImportCard :account="account" :company="company" @created="(id) => (open = id)" />
-            <RowGroup label="Statements" :count="mine.length" density="compact">
+            <!-- The company's imported statements as they last looked here, hand-drawn rows until then; an empty group read as
+                 "nothing imported" while the list was still on its way. -->
+            <SkeletonSnapshot v-if="sessions.isLoading.value" :of="`saldeo.sessions:${company}`" label="Reading imported statements">
+                <div role="status" aria-busy="true" aria-label="Reading imported statements">
+                    <RowGroup>
+                        <template #label><span class="skeleton block h-2.5 w-20" aria-hidden="true"></span></template>
+                        <SkeletonRows :rows="3" description />
+                    </RowGroup>
+                </div>
+            </SkeletonSnapshot>
+            <RowGroup v-else v-skeleton-source="`saldeo.sessions:${company}`" label="Statements" :count="mine.length" density="compact">
                 <Row
                     v-for="entry in mine"
                     :key="entry.id"
@@ -71,9 +82,12 @@ const applyMapping = async (mapping: Parameters<typeof actions.applyMapping.muta
                 <p class="mt-2">Import a bank export on the left, or open a statement. Matches are proposed; nothing is written to SaldeoSMART until you confirm and start the marking run.</p>
             </div>
             <Notice v-else-if="current.error.value" :of="{ tone: `danger`, title: `Could not open the session`, detail: current.error.value.message }" />
-            <p v-else-if="session === undefined" class="text-sm text-muted">Loading…</p>
-            <MappingEditor v-else-if="session.mapping === undefined || session.transactions.length === 0" :session="session" :busy="actions.applyMapping.isPending.value" :error="actions.applyMapping.error.value?.message" @apply="applyMapping" />
-            <SessionPane v-else :account="account" :session="session" :skipped="skipped" :browser-accounts="browserAccounts" :may-propose="mayPropose" :actions="actions" @closed="open = undefined" />
+            <SessionSkeleton v-else-if="session === undefined" :of="`saldeo.session:${open}`" />
+            <!-- Per session: one wrapper for whichever of the two it opens into, so either is what its skeleton remembers. -->
+            <div v-else v-skeleton-source="`saldeo.session:${open}`">
+                <MappingEditor v-if="session.mapping === undefined || session.transactions.length === 0" :session="session" :busy="actions.applyMapping.isPending.value" :error="actions.applyMapping.error.value?.message" @apply="applyMapping" />
+                <SessionPane v-else :account="account" :session="session" :skipped="skipped" :browser-accounts="browserAccounts" :may-propose="mayPropose" :actions="actions" @closed="open = undefined" />
+            </div>
         </section>
     </div>
 </template>
