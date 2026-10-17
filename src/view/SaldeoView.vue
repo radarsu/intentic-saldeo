@@ -71,9 +71,11 @@ const description = computed(() => {
                         variant="input"
                     />
                     <span v-else-if="company !== undefined" class="text-xs text-muted" :title="company">{{ companyOptions.find((option) => option.value === company)?.label ?? company }}</span>
-                    <SegmentedControl v-model="tab" size="sm" :options="TABS" />
                 </template>
             </PageHeader>
+
+            <!-- The four desks are parts of the page, so tabs under its header, not pills among its header's controls. -->
+            <SegmentedControl v-model="tab" variant="underline" :options="TABS" aria-label="Saldeo" />
 
             <Notice
                 v-if="unreachable"
