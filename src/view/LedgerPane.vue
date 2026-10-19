@@ -40,7 +40,7 @@ const csv = computed(() =>
                 </RowGroup>
             </div>
         </SkeletonSnapshot>
-        <RowGroup v-else v-skeleton-source="`saldeo.ledger:${account}`" label="Confirmed settlements" :count="entries.length" density="compact">
+        <RowGroup v-else v-skeleton-source="`saldeo.ledger:${account}`" label="Confirmed settlements" density="compact">
             <template #actions>
                 <CopyButton :text="csv" label="Copy as CSV" />
             </template>

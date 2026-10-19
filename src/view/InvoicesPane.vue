@@ -31,7 +31,7 @@ const today = new Date().toISOString().slice(0, 10);
 
 <template>
     <div class="flex flex-col gap-3">
-        <FilterBar v-model="query" placeholder="Number, contractor, NIP…" :count="visible.length" :busy="invoices.isFetching.value">
+        <FilterBar v-model="query" placeholder="Number, contractor, NIP…" :busy="invoices.isFetching.value">
             <template #controls>
                 <SegmentedControl v-model="direction" size="xs" :options="[{ label: `All`, value: `all` }, { label: `Owed to us`, value: `in` }, { label: `We owe`, value: `out` }]" />
                 <SegmentedControl v-model="scope" size="xs" :options="[{ label: `Open`, value: `open` }, { label: `Everything`, value: `all` }]" />
@@ -49,7 +49,7 @@ const today = new Date().toISOString().slice(0, 10);
                 </RowGroup>
             </div>
         </SkeletonSnapshot>
-        <RowGroup v-else v-skeleton-source="`saldeo.invoices:${company}`" :label="scope === `open` ? `Open` : `All`" :count="visible.length" density="compact" :caption="invoices.data.value ? `read ${timeAgo(Date.parse(invoices.data.value.fetchedAt))}` : `not read yet`">
+        <RowGroup v-else v-skeleton-source="`saldeo.invoices:${company}`" :label="scope === `open` ? `Open` : `All`" density="compact" :caption="invoices.data.value ? `read ${timeAgo(Date.parse(invoices.data.value.fetchedAt))}` : `not read yet`">
             <Row v-for="invoice in visible" :key="invoice.id" density="compact" :icon="invoice.direction === `in` ? `arrow-down-left` : `arrow-up-right`" :tone="invoice.dueDate !== undefined && invoice.dueDate < today && !invoice.isPaid ? `warning` : `default`">
                 <template #title>
                     <span class="flex flex-wrap items-baseline gap-x-2">

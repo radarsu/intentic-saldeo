@@ -48,7 +48,7 @@ const applyMapping = async (mapping: Parameters<typeof actions.applyMapping.muta
                     </RowGroup>
                 </div>
             </SkeletonSnapshot>
-            <RowGroup v-else v-skeleton-source="`saldeo.sessions:${company}`" label="Statements" :count="mine.length" density="compact">
+            <RowGroup v-else v-skeleton-source="`saldeo.sessions:${company}`" label="Statements" density="compact">
                 <Row
                     v-for="entry in mine"
                     :key="entry.id"
